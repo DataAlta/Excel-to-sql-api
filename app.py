@@ -101,22 +101,23 @@ def _preview_rows(df: pd.DataFrame, limit: int) -> List[Dict[str, Any]]:
 # =========================
 # 1) Initial preview  (tolerant to file/files; no 422 on missing file)
 # =========================
-@router.post("/api/parse_business_mapping", response_model=ParseResponse)
-async def parse_business_mapping(
-    request: Request,
-    file: Optional[UploadFile] = File(None, description="Excel file, field name 'file'"),
-    files: Optional[UploadFile] = File(None, alias="files", description="Alternate field name 'files'"),
-    preview_rows: str = Form("50"),
-):
-    # coerce preview_rows safely
-    try:
-        preview_rows_int = int(preview_rows)
-    except Exception:
-        preview_rows_int = 50
 
-    f = file or files
-    if f is None:
-        # avoid FastAPI 422 by handling ourselves
+@router.post("/api/parse_business_mapping", response_model=ParseResponse)
+async def parse_business_mapping(request: Request):
+    # Manually parse multipart, but expect ONLY the 'file' field
+    try:
+        form = await request.form()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid multipart/form-data")
+
+    preview_rows_raw = form.get("preview_rows", "50")
+    try:
+        preview_rows = int(preview_rows_raw) if str(preview_rows_raw).strip() else 50
+    except Exception:
+        preview_rows = 50
+
+    f = form.get("file")  # single-file only
+    if f is None or isinstance(f, str):
         raise HTTPException(status_code=400, detail="Missing file: send as multipart/form-data with field 'file'.")
 
     content = await f.read()
@@ -124,25 +125,21 @@ async def parse_business_mapping(
         raise HTTPException(status_code=400, detail="Empty file")
 
     try:
-        engine = _pick_engine(f.filename)
+        engine = _pick_engine(getattr(f, "filename", ""))
         xls = ExcelFile(io.BytesIO(content), engine=engine)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Unable to open workbook: {e}")
 
     preview: List[SheetPreview] = []
     for sheet in xls.sheet_names:
-        # read a small slice without headers for detection
         head = pd.read_excel(xls, sheet_name=sheet, header=None, nrows=30)
         header_row = detect_header_row(head, max_scan=25)
         if header_row is None:
-            # fallback: first non-empty row
             nonempty_mask = head.apply(lambda r: r.notna().any(), axis=1)
             header_row = int(nonempty_mask.idxmax()) if nonempty_mask.any() else 0
 
-        # re-read with inferred header
         df = pd.read_excel(xls, sheet_name=sheet, header=header_row)
 
-        # normalize columns
         cols: List[str] = []
         for i, c in enumerate(df.columns):
             name = str(c).strip()
@@ -151,17 +148,16 @@ async def parse_business_mapping(
 
         preview.append(SheetPreview(
             sheet=sheet,
-            header_row_excel=int(header_row) + 1,  # 1-based for Excel row no.
+            header_row_excel=int(header_row) + 1,
             columns=cols,
-            rows=_preview_rows(df, preview_rows_int),
+            rows=_preview_rows(df, preview_rows),
         ))
 
     return ParseResponse(
         message=f"Parsed {len(preview)} sheet(s).",
-        filename=f.filename,
+        filename=getattr(f, "filename", ""),
         preview=preview,
     )
-
 # =========================
 # 2) Parse mapping columns (your code, kept)
 # =========================
@@ -546,3 +542,4 @@ def health():
 
 # Mount router
 app.include_router(router)
+
