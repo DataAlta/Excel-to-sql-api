@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: excelto-sql-api
+    env: python
+    plan: free
+    region: singapore            #closest region
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn -k uvicorn.workers.UvicornWorker app:app --workers=3 --timeout=120 --log-level=info --bind 0.0.0.0:$PORT
+    autoDeploy: true
+    healthCheckPath: /
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11
+      - key: ENV
+        value: production
+      - key: CORS_ALLOW_ORIGINS
+        value: https://dataalta.com,https://www.dataalta.com
