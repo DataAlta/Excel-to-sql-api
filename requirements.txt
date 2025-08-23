@@ -1,8 +1,8 @@
+gunicorn
+python-multipart
+pandas>=2.0
+openpyxl>=3.1.0
+xlrd==1.2.0   # for legacy .xls only
 fastapi
 uvicorn
-pandas
-openpyxl
-gunicorn
-xlrd
 python-multipart
-
