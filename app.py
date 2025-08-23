@@ -93,6 +93,20 @@ def _preview_rows(df: pd.DataFrame, limit: int) -> List[Dict[str, Any]]:
 # =========================
 # 1) Initial preview
 # =========================
+from pydantic import BaseModel
+from typing import List, Any
+
+class SheetPreview(BaseModel):
+    sheet: str
+    header_row_excel: int
+    columns: List[str]
+    rows: List[Any]
+
+class ParseResponse(BaseModel):
+    message: str
+    filename: str
+    preview: List[SheetPreview]
+
 @router.post("/api/parse_business_mapping")
 async def parse_business_mapping(
     file: UploadFile = File(...),
@@ -541,3 +555,4 @@ def health():
 
 # Mount router
 app.include_router(router)
+
