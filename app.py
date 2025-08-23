@@ -97,33 +97,36 @@ async def parse_business_mapping(
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="Empty file")
-
     try:
         engine = _pick_engine(file.filename)
+        print(f"Using engine: {engine} for file {file.filename}")
         xls = pd.ExcelFile(io.BytesIO(content), engine=engine)
+        print(f"Sheet names: {xls.sheet_names}")
     except Exception as e:
+        print(f"Error opening workbook: {e}")
         raise HTTPException(status_code=400, detail=f"Unable to open workbook: {e}")
 
-    preview: List[SheetPreview] = []
+    preview = []
     for sheet in xls.sheet_names:
-        head = pd.read_excel(io.BytesIO(content), sheet_name=sheet, header=None, nrows=30, engine=engine)
-        header_row = detect_header_row(head, max_scan=25)
-        if header_row is None:
-            nonempty_mask = head.apply(lambda r: r.notna().any(), axis=1)
-            header_row = int(nonempty_mask.idxmax()) if nonempty_mask.any() else 0
-
-        df = pd.read_excel(io.BytesIO(content), sheet_name=sheet, header=header_row, engine=engine)
-
-        cols = [str(c).strip() if str(c).strip() != "" else f"Unnamed_{i}" for i, c in enumerate(df.columns)]
-        df.columns = cols
-
-        preview.append(SheetPreview(
-            sheet=sheet,
-            header_row_excel=header_row + 1,
-            columns=cols,
-            rows=_preview_rows(df, preview_rows),
-        ))
-
+        try:
+            head = pd.read_excel(io.BytesIO(content), sheet_name=sheet, header=None, nrows=30, engine=engine)
+            header_row = detect_header_row(head, max_scan=25)
+            if header_row is None:
+                nonempty_mask = head.apply(lambda r: r.notna().any(), axis=1)
+                header_row = int(nonempty_mask.idxmax()) if nonempty_mask.any() else 0
+            df = pd.read_excel(io.BytesIO(content), sheet_name=sheet, header=header_row, engine=engine)
+            cols = [str(c).strip() if str(c).strip() != "" else f"Unnamed_{i}" for i, c in enumerate(df.columns)]
+            df.columns = cols
+            preview.append(SheetPreview(
+                sheet=sheet,
+                header_row_excel=header_row + 1,
+                columns=cols,
+                rows=_preview_rows(df, preview_rows),
+            ))
+        except Exception as e:
+            print(f"Error processing sheet '{sheet}': {e}")
+            raise HTTPException(status_code=400, detail=f"Error processing sheet '{sheet}': {e}")
+    print(f"Returning preview for {len(preview)} sheets")
     return ParseResponse(
         message=f"Parsed {len(preview)} sheet(s).",
         filename=file.filename,
@@ -536,4 +539,5 @@ def health():
 
 # Mount router
 app.include_router(router)
+
 
