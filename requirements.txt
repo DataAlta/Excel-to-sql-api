@@ -4,3 +4,5 @@ pandas
 openpyxl
 gunicorn
 xlrd
+python-multipart
+
