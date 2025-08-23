@@ -1,15 +1,10 @@
-# =========================
-# ExceltoSQL API (cleaned)
-# =========================
-
 import io
 import json
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
-from pandas import ExcelFile
 
-from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File, Form, Request
+from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -30,7 +25,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],   # allow OPTIONS/GET/POST for preflight + health
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
@@ -54,20 +49,14 @@ class ParseResponse(BaseModel):
 # Helpers
 # =========================
 def _pick_engine(filename: str) -> str:
-    """Choose a pandas Excel engine based on extension."""
     fname = (filename or "").lower()
-    if fname.endswith(".xlsx") or fname.endswith(".xlsm"):
+    if fname.endswith((".xlsx", ".xlsm")):
         return "openpyxl"
     if fname.endswith(".xls"):
-        # requires xlrd==1.2.0 in dependencies for legacy .xls
-        return "xlrd"
+        return "xlrd"  # pip install xlrd==1.2.0 required for legacy .xls
     return "openpyxl"
 
 def detect_header_row(sample_df: pd.DataFrame, max_scan: int = 25) -> Optional[int]:
-    """
-    Heuristic: pick the first row (0-based) among top `max_scan` rows
-    that has the highest count of non-null *and* a decent share of strings/unique-ish values.
-    """
     if sample_df is None or sample_df.empty:
         return None
 
@@ -85,7 +74,6 @@ def detect_header_row(sample_df: pd.DataFrame, max_scan: int = 25) -> Optional[i
     return best_idx if best_idx is not None else None
 
 def _preview_rows(df: pd.DataFrame, limit: int) -> List[Dict[str, Any]]:
-    """Convert the first `limit` rows to JSON-serializable list of dicts."""
     out: List[Dict[str, Any]] = []
     for _, row in df.head(limit).iterrows():
         rec: Dict[str, Any] = {}
@@ -99,73 +87,57 @@ def _preview_rows(df: pd.DataFrame, limit: int) -> List[Dict[str, Any]]:
     return out
 
 # =========================
-# 1) Initial preview  (tolerant to file/files; no 422 on missing file)
+# 1) Initial preview  (now using UploadFile param)
 # =========================
-
 @router.post("/api/parse_business_mapping", response_model=ParseResponse)
-async def parse_business_mapping(request: Request):
-    # Manually parse multipart, but expect ONLY the 'file' field
-    try:
-        form = await request.form()
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid multipart/form-data")
-
-    preview_rows_raw = form.get("preview_rows", "50")
-    try:
-        preview_rows = int(preview_rows_raw) if str(preview_rows_raw).strip() else 50
-    except Exception:
-        preview_rows = 50
-
-    f = form.get("file")  # single-file only
-    if f is None or isinstance(f, str):
-        raise HTTPException(status_code=400, detail="Missing file: send as multipart/form-data with field 'file'.")
-
-    content = await f.read()
+async def parse_business_mapping(
+    file: UploadFile = File(...),
+    preview_rows: int = Form(50),
+):
+    content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="Empty file")
 
     try:
-        engine = _pick_engine(getattr(f, "filename", ""))
-        xls = ExcelFile(io.BytesIO(content), engine=engine)
+        engine = _pick_engine(file.filename)
+        xls = pd.ExcelFile(io.BytesIO(content), engine=engine)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Unable to open workbook: {e}")
 
     preview: List[SheetPreview] = []
     for sheet in xls.sheet_names:
-        head = pd.read_excel(xls, sheet_name=sheet, header=None, nrows=30)
+        head = pd.read_excel(io.BytesIO(content), sheet_name=sheet, header=None, nrows=30, engine=engine)
         header_row = detect_header_row(head, max_scan=25)
         if header_row is None:
             nonempty_mask = head.apply(lambda r: r.notna().any(), axis=1)
             header_row = int(nonempty_mask.idxmax()) if nonempty_mask.any() else 0
 
-        df = pd.read_excel(xls, sheet_name=sheet, header=header_row)
+        df = pd.read_excel(io.BytesIO(content), sheet_name=sheet, header=header_row, engine=engine)
 
-        cols: List[str] = []
-        for i, c in enumerate(df.columns):
-            name = str(c).strip()
-            cols.append(name if name else f"Unnamed_{i}")
+        cols = [str(c).strip() if str(c).strip() != "" else f"Unnamed_{i}" for i, c in enumerate(df.columns)]
         df.columns = cols
 
         preview.append(SheetPreview(
             sheet=sheet,
-            header_row_excel=int(header_row) + 1,
+            header_row_excel=header_row + 1,
             columns=cols,
             rows=_preview_rows(df, preview_rows),
         ))
 
     return ParseResponse(
         message=f"Parsed {len(preview)} sheet(s).",
-        filename=getattr(f, "filename", ""),
+        filename=file.filename,
         preview=preview,
     )
+
 # =========================
-# 2) Parse mapping columns (your code, kept)
+# 2) Parse mapping columns
 # =========================
 @router.post("/api/parse_business_mapping_columns")
 async def parse_business_mapping_columns(
     file: UploadFile = File(...),
     sheet: str = Form(...),
-    roles: str = Form(...),  # JSON: {"output":"ColA","table":"ColB","column":"ColC","mappingType":"ColD","transform":"ColE"}
+    roles: str = Form(...),
 ):
     content = await file.read()
     if not content:
@@ -183,31 +155,28 @@ async def parse_business_mapping_columns(
 
     try:
         engine = _pick_engine(file.filename)
-        xls = ExcelFile(io.BytesIO(content), engine=engine)
+        xls = pd.ExcelFile(io.BytesIO(content), engine=engine)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Unable to open workbook: {e}")
 
     if sheet not in xls.sheet_names:
         raise HTTPException(status_code=404, detail=f"Sheet '{sheet}' not found")
 
-    # Read sheet with auto header detection like upload route did
-    head = pd.read_excel(xls, sheet_name=sheet, header=None, nrows=30)
+    head = pd.read_excel(io.BytesIO(content), sheet_name=sheet, header=None, nrows=30, engine=engine)
     header_row = detect_header_row(head, max_scan=25)
     if header_row is None:
         nonempty_mask = head.apply(lambda r: r.notna().any(), axis=1)
         header_row = int(nonempty_mask.idxmax()) if nonempty_mask.any() else 0
 
-    df = pd.read_excel(xls, sheet_name=sheet, header=header_row)
+    df = pd.read_excel(io.BytesIO(content), sheet_name=sheet, header=header_row, engine=engine)
     df.columns = [str(c).strip() if str(c).strip() != "" else f"Unnamed_{i}" for i, c in enumerate(df.columns)]
 
-    # Ensure selected columns exist
     for key, colname in role_map.items():
         if not colname:
             continue
         if colname not in df.columns:
             raise HTTPException(status_code=400, detail=f"Column '{colname}' (role '{key}') not found in sheet")
 
-    # Build mapping rows from ALL rows in the sheet
     out_col = role_map["output"]
     tbl_col = role_map["table"]
     col_col = role_map["column"]
@@ -248,7 +217,7 @@ async def parse_business_mapping_columns(
 async def reparse_business_mapping(
     file: UploadFile = File(...),
     sheet: str = Form(...),
-    header_row_excel: int = Form(...),  # 1-based
+    header_row_excel: int = Form(...),
     preview_rows: int = Form(50),
 ):
     content = await file.read()
@@ -257,7 +226,7 @@ async def reparse_business_mapping(
 
     try:
         engine = _pick_engine(file.filename)
-        xls = ExcelFile(io.BytesIO(content), engine=engine)
+        xls = pd.ExcelFile(io.BytesIO(content), engine=engine)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Unable to open workbook: {e}")
 
@@ -265,27 +234,23 @@ async def reparse_business_mapping(
         raise HTTPException(status_code=404, detail=f"Sheet '{sheet}' not found")
 
     header_idx = max(0, int(header_row_excel) - 1)
-    df = pd.read_excel(xls, sheet_name=sheet, header=header_idx)
+    df = pd.read_excel(io.BytesIO(content), sheet_name=sheet, header=header_idx, engine=engine)
     cols = [str(c).strip() if str(c).strip() != "" else f"Unnamed_{i}" for i, c in enumerate(df.columns)]
     df.columns = cols
 
     return {
         "sheet": sheet,
-        "header_row_excel": int(header_idx) + 1,
+        "header_row_excel": header_idx + 1,
         "columns": cols,
         "rows": _preview_rows(df, preview_rows),
         "message": f"Re-parsed '{sheet}' with header at Excel row {header_idx + 1}."
     }
 
 # =========================
-# 4) Infer SQL structure (your logic, kept)
+# 4) Infer SQL structure (kept unchanged)
 # =========================
 @router.post("/api/infer_sql_structure")
 async def infer_sql_structure(body: Dict[str, Any]):
-    """
-    Infer a technical SQL structure *purely* from mapping rows.
-    Ignores filename/sheet — they are just metadata from the frontend.
-    """
     rows = body.get("rows") or []
     if not isinstance(rows, list) or not rows:
         return {"from": "", "select_items": [], "joins": [], "message": "No mapping rows provided"}
@@ -397,7 +362,7 @@ async def infer_sql_structure(body: Dict[str, Any]):
     }
 
 # =========================
-# 5) Pattern-based SQL builder (your logic, kept)
+# 5) Pattern-based SQL builder (kept unchanged)
 # =========================
 def _render_like(col: str, mode: str, value: str) -> str:
     if mode == "contains":    return f"{col} LIKE '%{value}%'"
@@ -542,4 +507,3 @@ def health():
 
 # Mount router
 app.include_router(router)
-
