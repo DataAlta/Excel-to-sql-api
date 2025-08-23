@@ -490,6 +490,35 @@ async def generate_sql_with_patterns(payload: Dict[str, Any]):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to generate SQL: {e}")
 
+from fastapi import Body
+
+@router.post("/api/generate_sql_from_excel_mapping")
+async def generate_sql_from_excel_mapping(body: Dict[str, Any] = Body(...)):
+    """
+    Accept JSON body with 'rows' key containing parsed mappings from Excel.
+    Infer SQL structure and generate SQL query string.
+    Return the generated SQL text without running it.
+    """
+    rows = body.get("rows")
+    if not rows or not isinstance(rows, list):
+        raise HTTPException(status_code=400, detail="Missing or invalid 'rows' in request body.")
+
+    # Step 1: Infer SQL structure from mapping rows
+    sql_structure = await infer_sql_structure({"rows": rows})
+
+    # Compose payload for pattern-based SQL builder
+    payload = {
+        "from": {"table": sql_structure.get("from").split()[0] if sql_structure.get("from") else ""},
+        "select_items": sql_structure.get("select_items", []),
+        "joins": [f"{j['type']} JOIN {j['right_table']} ON {j['left_key']} = {j['right_key']}" for j in sql_structure.get("joins", [])],
+        # Add empty patterns - can be enhanced to accept from body if needed
+        "patterns": {}
+    }
+
+    # Step 2: Generate SQL string (text only)
+    sql_text = _build_sql_with_patterns(payload)
+
+    return {"sql": sql_text}
 # =========================
 # 6) Save (stub)
 # =========================
@@ -507,3 +536,4 @@ def health():
 
 # Mount router
 app.include_router(router)
+
