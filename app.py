@@ -183,7 +183,7 @@ async def parse_business_mapping_columns(
     out_col = role_map["output"]
     tbl_col = role_map["table"]
     col_col = role_map["column"]
-    map_col = role_map.get("mappingType")
+    join_col = role_map.get("join")
     trn_col = role_map.get("transform")
 
     records = []
@@ -191,7 +191,7 @@ async def parse_business_mapping_columns(
         output = str(row.get(out_col, "")).strip()
         table = str(row.get(tbl_col, "")).strip()
         column = str(row.get(col_col, "")).strip()
-        mapping_type = str(row.get(map_col, "")).strip() if map_col else ""
+        join_value = str(row.get(join_col, "")).strip()
         transform = str(row.get(trn_col, "")).strip() if trn_col else ""
 
         if not (output and table and column):
@@ -201,7 +201,7 @@ async def parse_business_mapping_columns(
             "output": output,
             "table": table,
             "column": column,
-            "mappingType": mapping_type or "",
+            "join": join_value,
             "transform": transform or "",
         })
 
@@ -276,31 +276,30 @@ async def infer_sql_structure(body: Dict[str, Any]):
         c = (r.get("column") or "").strip()
         out = (r.get("output") or "").strip()
         tr = (r.get("transform") or "").strip()
+        join_cond = (r.get("join") or "").strip()  # New join role column
         if not (t_raw and c and out):
             continue
-
         ta = split_table_alias(t_raw)
         table = ta["table"]
         alias = ta["alias"]
-
         table_counts[table] = table_counts.get(table, 0) + 1
         table_columns.setdefault(table, set()).add(c)
-
         parsed_rows.append({
             "table": table,
             "alias_in": alias,
             "column": c,
             "output": out,
             "transform": tr,
+            "join": join_cond,
         })
 
     if not parsed_rows:
         return {"from": "", "select_items": [], "joins": [], "message": "No complete mapping rows to infer from"}
 
     base_table = max(table_counts.items(), key=lambda kv: kv[1])[0]
-
     alias_map: Dict[str, str] = {}
     used = set()
+
     for pr in parsed_rows:
         if pr["alias_in"]:
             alias_map[pr["table"]] = pr["alias_in"]
@@ -330,38 +329,44 @@ async def infer_sql_structure(body: Dict[str, Any]):
         alias_for_output = (out.replace(" ", "") or col)
         select_items.append({"output": out, "expression": expr, "alias": alias_for_output})
 
+    # Track join condition per table to reuse if missing
+    join_conditions_by_table: Dict[str, str] = {}
+
+    for pr in parsed_rows:
+        t = pr["table"]
+        join_cond = pr.get("join", "").strip()
+        if join_cond:
+            join_conditions_by_table[t] = join_cond
+        else:
+            # Fill missing join with previous condition if exists
+            if t in join_conditions_by_table:
+                pr["join"] = join_conditions_by_table[t]
+
+    # Build unique joins by table, using stored join conditions
     joins = []
-    if len(table_counts) > 1:
-        import re
-        key_rx = re.compile(r"(id|code|key)$", re.IGNORECASE)
-        base_cols = table_columns[base_table]
-        prio_keys_base = {c for c in base_cols if key_rx.search(c)}
-
-        for other in table_counts:
-            if other == base_table:
-                continue
-            other_cols = table_columns[other]
-            prio_keys_other = {c for c in other_cols if key_rx.search(c)}
-
-            shared = prio_keys_base & prio_keys_other
-            if not shared:
-                shared = base_cols & other_cols
-            if shared:
-                key = sorted(shared)[0]
-                joins.append({
-                    "type": "LEFT",
-                    "left_table": f"{base_table} {base_alias}",
-                    "left_key": f"{base_alias}.{key}",
-                    "right_table": f"{other} {alias_map[other]}",
-                    "right_key": f"{alias_map[other]}.{key}",
-                    "condition": ""
-                })
+    joined_tables = set()
+    for t, condition in join_conditions_by_table.items():
+        if t == base_table:
+            continue  # base table, no join needed
+        if t in joined_tables:
+            continue  # avoid duplicates
+        right_alias = alias_map[t]
+        join_clause = {
+            "type": "LEFT",
+            "left_table": f"{base_table} {base_alias}",
+            "left_key": "",  # could parse further if needed
+            "right_table": f"{t} {right_alias}",
+            "right_key": "",
+            "condition": condition,
+        }
+        joins.append(join_clause)
+        joined_tables.add(t)
 
     return {
         "from": base_from,
         "select_items": select_items,
         "joins": joins,
-        "message": "Inferred from mapping",
+        "message": "Inferred from mapping with reused join conditions",
     }
 
 # =========================
@@ -539,5 +544,3 @@ def health():
 
 # Mount router
 app.include_router(router)
-
-
