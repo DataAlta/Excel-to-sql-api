@@ -98,16 +98,6 @@ def get_alias(table_str):
         return parts[-1].strip()
     return ""
 
-def parse_keys_from_condition(condition):
-    if not condition:
-        return "", ""
-    match = re.match(r"(.+?)\s*=\s*(.+)", condition)
-    if match:
-        return match.group(1).strip(), match.group(2).strip()
-    # single-key fallback (e.g., 'CustomerID')
-    cond = condition.strip()
-    return cond, cond
-
 def qualify_key(alias, key):
     if not key:
         return ""
@@ -392,11 +382,6 @@ async def infer_sql_structure(body: Dict[str, Any]):
             if t in join_conditions_by_table:
                 pr["join"] = join_conditions_by_table[t]
 
-    def parse_keys_from_condition(condition: str):
-        parts = condition.split("=")
-        if len(parts) == 2:
-            return parts[0].strip(), parts[1].strip()
-        return "", ""
 
     def qualify_key(alias: str, key: str):
         if not key:
