@@ -87,11 +87,11 @@ def _preview_rows(df: pd.DataFrame, limit: int) -> List[Dict[str, Any]]:
     return out
 
 def parse_join_condition(cond: str):
-      parts = cond.split('=')
-      if len(parts) == 2:
-            return parts[0].strip(), parts[1].strip()
-      return "", ""
-      
+     parts = cond.split('=')
+     if len(parts) == 2:
+         return parts[0].strip(), parts[1].strip()
+     return "", ""
+
 def get_alias(table_str):
     parts = table_str.strip().split()
     if len(parts) >= 2:
@@ -382,15 +382,6 @@ async def infer_sql_structure(body: Dict[str, Any]):
             if t in join_conditions_by_table:
                 pr["join"] = join_conditions_by_table[t]
 
-
-    def qualify_key(alias: str, key: str):
-        if not key:
-            return ""
-        if "." in key:
-            return key
-        if alias:
-            return f"{alias}.{key}"
-        return key
 
     joins = []
     joined_tables = set()
