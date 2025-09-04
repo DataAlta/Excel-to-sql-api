@@ -114,15 +114,28 @@ def parse_join_condition_sides(condition):
     if len(parts) != 2:
         return ("", ""), ("", "")
     left, right = parts[0].strip(), parts[1].strip()
+
+    def strip_schema(name: str) -> str:
+        return name.split(".", 1)[-1] if "." in name else name
+
     if "." in left:
         lt, lcol = left.split(".", 1)
+        lt = strip_schema(lt)
     else:
         lt, lcol = "", left
+
     if "." in right:
         rt, rcol = right.split(".", 1)
+        rt = strip_schema(rt)
     else:
         rt, rcol = "", right
+
     return (lt.strip(), lcol.strip()), (rt.strip(), rcol.strip())
+
+
+def strip_schema(name: str) -> str:
+    return name.split(".", 1)[-1] if "." in name else name
+
 
 # =========================
 # 1) Initial preview  (now using UploadFile param)
@@ -303,10 +316,20 @@ async def infer_sql_structure(body: Dict[str, Any]):
         t = (t or "").strip()
         if not t:
             return {"table": "", "alias": ""}
+
         parts = t.split()
         if len(parts) >= 2:
-            return {"table": " ".join(parts[:-1]), "alias": parts[-1]}
-        return {"table": t, "alias": ""}
+            table_name = " ".join(parts[:-1]).strip()
+            # Remove schema prefix if present
+            if "." in table_name:
+                table_name = table_name.split(".", 1)[1]
+            return {"table": table_name, "alias": parts[-1].strip()}
+
+        table_name = t
+        if "." in table_name:
+            table_name = table_name.split(".", 1)[1]
+        return {"table": table_name, "alias": ""}
+
 
     table_counts: Dict[str, int] = {}
     table_columns: Dict[str, set] = {}
@@ -389,6 +412,9 @@ async def infer_sql_structure(body: Dict[str, Any]):
     joins = []
     joined_tables = set()
     
+    # Normalize alias_map keys once after building it
+    alias_map = {k.strip().lower(): v for k, v in alias_map.items()}
+        
     for t, condition in join_conditions_by_table.items():
         if t == base_table or not t.strip() or t.lower() == "nan":
             continue  # skip base or invalid/nan tables
@@ -396,29 +422,40 @@ async def infer_sql_structure(body: Dict[str, Any]):
         (ltbl, lcol), (rtbl, rcol) = parse_join_condition_sides(condition)
         if not ltbl or not rtbl:
             continue  # Must have both tables!
+            
+              
+        # Normalize keys when looking up
+        ltbl_norm = ltbl.strip().lower()
+        rtbl_norm = rtbl.strip().lower()
+        
         # Skip duplicate joins (optional, your logic)
         join_key = tuple(sorted([ltbl, rtbl]))
         if join_key in joined_tables:
             continue
-        
-        # Normalize alias_map keys once after building it
-        alias_map = {k.strip().lower(): v for k, v in alias_map.items()}
 
-        # Normalize keys when looking up
-        ltbl_norm = ltbl.strip().lower()
-        rtbl_norm = rtbl.strip().lower()
 
         lalias = alias_map.get(ltbl_norm, "")
         ralias = alias_map.get(rtbl_norm, "")
+        left_table = f"{ltbl_norm} {lalias}".strip()
+        right_table = f"{rtbl_norm} {ralias}".strip()
+        condition_str = f"{lalias}.{lcol} = {ralias}.{rcol}" if lalias and ralias else condition
 
+        print("Processing join condition:", condition)
+        print(f"Parsed left table: '{ltbl}', column: '{lcol}'")
+        print(f"Parsed right table: '{rtbl}', column: '{rcol}'")
+        print(f"Normalized left table: '{ltbl_norm}', right table: '{rtbl_norm}'")
+        print(f"Alias map keys: {list(alias_map.keys())}")
+        print(f"Left alias found: '{lalias}'")
+        print(f"Right alias found: '{ralias}'")
+        print(f"Join key tuple: {join_key}")
 
         join_clause = {
             "type": "LEFT",
-            "left_table": f"{ltbl} {lalias}".strip(),
+            "left_table": left_table,
             "left_key": f"{lalias}.{lcol}" if lalias else lcol,
-            "right_table": f"{rtbl} {ralias}".strip(),
+            "right_table": right_table,
             "right_key": f"{ralias}.{rcol}" if ralias else rcol,
-            "condition": f"{lalias}.{lcol} = {ralias}.{rcol}" if lalias and ralias else condition,
+            "condition": condition_str,
         }
         joins.append(join_clause)
         joined_tables.add(join_key)
