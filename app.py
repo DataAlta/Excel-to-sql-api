@@ -488,7 +488,11 @@ def _build_sql_with_patterns(payload: Dict[str, Any]) -> str:
         applied.append(new_it)
 
     select_sql = ",\n  ".join(
-        [f"{it.get('expression')} AS [{it.get('output')}]" for it in applied if it.get("expression")]
+    [
+        f"{(it.get('expression') and str(it.get('expression')).strip() and str(it.get('expression')).lower() != 'nan' and it.get('expression')) or it.get('output')} AS [{it.get('output')}]"
+        for it in applied
+        if it.get("output")
+    ]
     )
     base_from = f"{base_table} {base_alias}".rstrip()
     join_sql = ("\n" + "\n".join(joins)) if joins else ""
@@ -552,3 +556,4 @@ def health():
 
 # Mount router
 app.include_router(router)
+
