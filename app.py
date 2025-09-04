@@ -316,7 +316,7 @@ async def infer_sql_structure(body: Dict[str, Any]):
         t = (t or "").strip()
         if not t:
             return {"table": "", "alias": ""}
-
+        # Split on whitespace(s) to handle multiple spaces/tabs
         parts = t.split()
         if len(parts) >= 2:
             table_name = " ".join(parts[:-1]).strip()
@@ -324,7 +324,6 @@ async def infer_sql_structure(body: Dict[str, Any]):
             if "." in table_name:
                 table_name = table_name.split(".", 1)[1]
             return {"table": table_name, "alias": parts[-1].strip()}
-
         table_name = t
         if "." in table_name:
             table_name = table_name.split(".", 1)[1]
@@ -364,10 +363,13 @@ async def infer_sql_structure(body: Dict[str, Any]):
     alias_map: Dict[str, str] = {}
     used = set()
 
+    # Reuse aliases already present in parsed_rows
     for pr in parsed_rows:
-        if pr["alias_in"]:
-            alias_map[pr["table"]] = pr["alias_in"]
-            used.add(pr["alias_in"])
+        alias_in = pr.get("alias_in", "").strip()
+        table = pr.get("table", "").strip()
+        if alias_in:
+            alias_map[table] = alias_in
+            used.add(alias_in)
 
     def make_alias(t: str) -> str:
         base = (t[:1] or "t").upper()
@@ -379,10 +381,12 @@ async def infer_sql_structure(body: Dict[str, Any]):
         used.add(cand)
         return cand
 
+    # Assign new aliases only to tables without one already
     for t in table_counts:
-        if t not in alias_map:
+        if t not in alias_map or not alias_map[t]:
             alias_map[t] = make_alias(t)
 
+    # Get base alias safely with fallback
     base_alias = alias_map.get(base_table)
     if not base_alias:
         base_alias = base_table[:1].upper() if base_table else "T"
@@ -439,15 +443,6 @@ async def infer_sql_structure(body: Dict[str, Any]):
         left_table = f"{ltbl_norm} {lalias}".strip()
         right_table = f"{rtbl_norm} {ralias}".strip()
         condition_str = f"{lalias}.{lcol} = {ralias}.{rcol}" if lalias and ralias else condition
-
-        print("Processing join condition:", condition)
-        print(f"Parsed left table: '{ltbl}', column: '{lcol}'")
-        print(f"Parsed right table: '{rtbl}', column: '{rcol}'")
-        print(f"Normalized left table: '{ltbl_norm}', right table: '{rtbl_norm}'")
-        print(f"Alias map keys: {list(alias_map.keys())}")
-        print(f"Left alias found: '{lalias}'")
-        print(f"Right alias found: '{ralias}'")
-        print(f"Join key tuple: {join_key}")
 
         join_clause = {
             "type": "LEFT",
