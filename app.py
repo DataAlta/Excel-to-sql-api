@@ -342,6 +342,13 @@ async def infer_sql_structure(body: Dict[str, Any]):
             if t in join_conditions_by_table:
                 pr["join"] = join_conditions_by_table[t]
 
+    # Define helper 
+    def parse_join_condition(cond: str):
+    	parts = cond.split('=')
+    	if len(parts) == 2:
+        	return parts[0].strip(), parts[1].strip()
+    	return "", ""
+
     # Build unique joins by table, using stored join conditions
     joins = []
     joined_tables = set()
@@ -350,6 +357,7 @@ async def infer_sql_structure(body: Dict[str, Any]):
             continue  # base table, no join needed
         if t in joined_tables:
             continue  # avoid duplicates
+        left_key, right_key = parse_join_condition(condition)
         right_alias = alias_map[t]
         join_clause = {
             "type": "LEFT",
