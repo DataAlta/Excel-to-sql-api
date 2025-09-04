@@ -360,7 +360,10 @@ async def infer_sql_structure(body: Dict[str, Any]):
         if t not in alias_map:
             alias_map[t] = make_alias(t)
 
-    base_alias = alias_map[base_table]
+    base_alias = alias_map.get(base_table)
+    if not base_alias:
+        base_alias = base_table[:1].upper() if base_table else "T"
+
     base_from = f"{base_table} {base_alias}"
 
     select_items = []
@@ -385,7 +388,10 @@ async def infer_sql_structure(body: Dict[str, Any]):
 
     joins = []
     joined_tables = set()
+    
     for t, condition in join_conditions_by_table.items():
+        if t == base_table or not t.strip() or t.lower() == "nan":
+            continue  # skip base or invalid/nan tables
         # Parse both sides of the join condition
         (ltbl, lcol), (rtbl, rcol) = parse_join_condition_sides(condition)
         if not ltbl or not rtbl:
@@ -407,6 +413,14 @@ async def infer_sql_structure(body: Dict[str, Any]):
         joins.append(join_clause)
         joined_tables.add(join_key)
     
+    
+    return {
+        "from": base_from,
+        "select_items": select_items,
+        "joins": joins,
+        "message": "Inferred from mapping with reused join conditions",
+    }
+
    
 # =========================
 # 5) Pattern-based SQL builder (kept unchanged)
