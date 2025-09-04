@@ -413,47 +413,75 @@ async def infer_sql_structure(body: Dict[str, Any]):
                 pr["join"] = join_conditions_by_table[t]
 
 
+    # After alias_map and base_alias are determined
+    # We'll update join keys to reflect new base_alias consistently
+
     joins = []
     joined_tables = set()
-    
+
     # Normalize alias_map keys once after building it
     alias_map = {k.strip().lower(): v for k, v in alias_map.items()}
-        
+
+    # Old base alias (to be replaced in keys)
+    old_base_alias = None
+    if base_table in alias_map:
+        old_base_alias = alias_map[base_table].lower()
+
     for t, condition in join_conditions_by_table.items():
         if t == base_table or not t.strip() or t.lower() == "nan":
             continue  # skip base or invalid/nan tables
+
         # Parse both sides of the join condition
         (ltbl, lcol), (rtbl, rcol) = parse_join_condition_sides(condition)
         if not ltbl or not rtbl:
             continue  # Must have both tables!
-            
-              
+
         # Normalize keys when looking up
         ltbl_norm = ltbl.strip().lower()
         rtbl_norm = rtbl.strip().lower()
-        
+
         # Skip duplicate joins (optional, your logic)
-        join_key = tuple(sorted([ltbl, rtbl]))
+        join_key = tuple(sorted([ltbl_norm, rtbl_norm]))
         if join_key in joined_tables:
             continue
 
-
         lalias = alias_map.get(ltbl_norm, "")
         ralias = alias_map.get(rtbl_norm, "")
-        left_table = f"{ltbl_norm} {lalias}".strip()
-        right_table = f"{rtbl_norm} {ralias}".strip()
-        condition_str = f"{lalias}.{lcol} = {ralias}.{rcol}" if lalias and ralias else condition
+
+        # **Fix join keys to replace old base alias with current base alias**
+        # This handles the case when base table alias has changed and join keys reference old alias
+        # Normalize aliases for comparison
+        base_alias_lower = base_alias.lower()
+        if old_base_alias and lalias.lower() == old_base_alias:
+            lalias_fixed = base_alias
+        else:
+            lalias_fixed = lalias
+
+        if old_base_alias and ralias.lower() == old_base_alias:
+            ralias_fixed = base_alias
+        else:
+            ralias_fixed = ralias
+
+        # Build join tables with aliases
+        left_table = f"{ltbl} {lalias_fixed}".strip()
+        right_table = f"{rtbl} {ralias_fixed}".strip()
+
+        # Build condition replacing old alias with new alias in keys
+        left_key = f"{lalias_fixed}.{lcol}" if lalias_fixed else lcol
+        right_key = f"{ralias_fixed}.{rcol}" if ralias_fixed else rcol
+        condition_str = f"{left_key} = {right_key}" if lalias_fixed and ralias_fixed else condition
 
         join_clause = {
             "type": "LEFT",
             "left_table": left_table,
-            "left_key": f"{lalias}.{lcol}" if lalias else lcol,
+            "left_key": left_key,
             "right_table": right_table,
-            "right_key": f"{ralias}.{rcol}" if ralias else rcol,
+            "right_key": right_key,
             "condition": condition_str,
         }
         joins.append(join_clause)
         joined_tables.add(join_key)
+
     
     
     return {
