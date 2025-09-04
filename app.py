@@ -87,11 +87,11 @@ def _preview_rows(df: pd.DataFrame, limit: int) -> List[Dict[str, Any]]:
     return out
 
 def parse_join_condition(cond: str):
-	parts = cond.split('=')
-	if len(parts) == 2:
-		return parts[0].strip(), parts[1].strip()
-	return "", ""
-	
+      parts = cond.split('=')
+      if len(parts) == 2:
+            return parts[0].strip(), parts[1].strip()
+      return "", ""
+      
 def get_alias(table_str):
     parts = table_str.strip().split()
     if len(parts) >= 2:
@@ -116,6 +116,23 @@ def qualify_key(alias, key):
     if alias:
         return f"{alias}.{key}"
     return key
+
+
+def parse_join_condition_sides(condition):
+    # returns (left_table, left_col), (right_table, right_col)
+    parts = condition.split("=")
+    if len(parts) != 2:
+        return ("", ""), ("", "")
+    left, right = parts[0].strip(), parts[1].strip()
+    if "." in left:
+        lt, lcol = left.split(".", 1)
+    else:
+        lt, lcol = "", left
+    if "." in right:
+        rt, rcol = right.split(".", 1)
+    else:
+        rt, rcol = "", right
+    return (lt.strip(), lcol.strip()), (rt.strip(), rcol.strip())
 
 # =========================
 # 1) Initial preview  (now using UploadFile param)
@@ -290,6 +307,8 @@ async def infer_sql_structure(body: Dict[str, Any]):
     if not isinstance(rows, list) or not rows:
         return {"from": "", "select_items": [], "joins": [], "message": "No mapping rows provided"}
 
+    base_table_from_request = body.get("base_table")
+
     def split_table_alias(t: str) -> Dict[str, str]:
         t = (t or "").strip()
         if not t:
@@ -328,7 +347,7 @@ async def infer_sql_structure(body: Dict[str, Any]):
     if not parsed_rows:
         return {"from": "", "select_items": [], "joins": [], "message": "No complete mapping rows to infer from"}
 
-    base_table = max(table_counts.items(), key=lambda kv: kv[1])[0]
+    base_table = base_table_from_request if base_table_from_request else max(table_counts.items(), key=lambda kv: kv[1])[0]
     alias_map: Dict[str, str] = {}
     used = set()
 
@@ -390,35 +409,29 @@ async def infer_sql_structure(body: Dict[str, Any]):
 
     joins = []
     joined_tables = set()
-
     for t, condition in join_conditions_by_table.items():
-        if t == base_table or not t.strip() or t.lower() == "nan":
-            continue  # skip base or invalid/nan tables
-        if t in joined_tables:
-            continue  # avoid duplicates
-        left_alias = alias_map[base_table]
-        right_alias = alias_map[t]
-        left_key_raw, right_key_raw = parse_keys_from_condition(condition)
-        left_key = qualify_key(left_alias, left_key_raw)
-        right_key = qualify_key(right_alias, right_key_raw)
+        # Parse both sides of the join condition
+        (ltbl, lcol), (rtbl, rcol) = parse_join_condition_sides(condition)
+        if not ltbl or not rtbl:
+            continue  # Must have both tables!
+        # Skip duplicate joins (optional, your logic)
+        join_key = tuple(sorted([ltbl, rtbl]))
+        if join_key in joined_tables:
+            continue
+        lalias = alias_map.get(ltbl, "")
+        ralias = alias_map.get(rtbl, "")
         join_clause = {
             "type": "LEFT",
-            "left_table": f"{base_table} {left_alias}",
-            "left_key": left_key,
-            "right_table": f"{t} {right_alias}",
-            "right_key": right_key,
+            "left_table": f"{ltbl} {lalias}".strip(),
+            "left_key": f"{lalias}.{lcol}" if lalias else lcol,
+            "right_table": f"{rtbl} {ralias}".strip(),
+            "right_key": f"{ralias}.{rcol}" if ralias else rcol,
             "condition": condition,
         }
         joins.append(join_clause)
-        joined_tables.add(t)
-
-    return {
-        "from": base_from,
-        "select_items": select_items,
-        "joins": joins,
-        "message": "Inferred from mapping with reused join conditions",
-    }
-
+        joined_tables.add(join_key)
+    
+   
 # =========================
 # 5) Pattern-based SQL builder (kept unchanged)
 # =========================
@@ -605,5 +618,3 @@ def health():
 
 # Mount router
 app.include_router(router)
-
-
