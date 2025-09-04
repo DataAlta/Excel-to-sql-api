@@ -353,7 +353,7 @@ async def infer_sql_structure(body: Dict[str, Any]):
     joins = []
     joined_tables = set()
     for t, condition in join_conditions_by_table.items():
-        if t == base_table:
+        if t == base_table or not t.strip() or t.lower() == "nan":
             continue  # base table, no join needed
         if t in joined_tables:
             continue  # avoid duplicates
@@ -556,4 +556,5 @@ def health():
 
 # Mount router
 app.include_router(router)
+
 
