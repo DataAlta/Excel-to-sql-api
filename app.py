@@ -283,6 +283,7 @@ async def reparse_business_mapping(
 # =========================
 # 4) Infer SQL structure (kept unchanged)
 # =========================
+
 @router.post("/api/infer_sql_structure")
 async def infer_sql_structure(body: Dict[str, Any]):
     rows = body.get("rows") or []
@@ -362,7 +363,6 @@ async def infer_sql_structure(body: Dict[str, Any]):
 
     # Track join condition per table to reuse if missing
     join_conditions_by_table: Dict[str, str] = {}
-
     for pr in parsed_rows:
         t = pr["table"]
         join_cond = pr.get("join", "").strip()
@@ -373,37 +373,44 @@ async def infer_sql_structure(body: Dict[str, Any]):
             if t in join_conditions_by_table:
                 pr["join"] = join_conditions_by_table[t]
 
+    def parse_keys_from_condition(condition: str):
+        parts = condition.split("=")
+        if len(parts) == 2:
+            return parts[0].strip(), parts[1].strip()
+        return "", ""
 
+    def qualify_key(alias: str, key: str):
+        if not key:
+            return ""
+        if "." in key:
+            return key
+        if alias:
+            return f"{alias}.{key}"
+        return key
 
-    # Build unique joins by table, using stored join conditions
-	joins = []
-	joined_tables = set()
-	for t, condition in join_conditions_by_table.items():
-		if t == base_table or not t.strip() or t.lower() == "nan":
-			continue  # skip base or invalid/nan tables
-		if t in joined_tables:
-			continue  # avoid duplicates
+    joins = []
+    joined_tables = set()
 
-		# Get correct aliases
-		left_alias = alias_map[base_table]
-		right_alias = alias_map[t]
-
-		# Parse keys from condition, use aliases
-		left_key_raw, right_key_raw = parse_keys_from_condition(condition)
-		left_key = qualify_key(left_alias, left_key_raw)
-		right_key = qualify_key(right_alias, right_key_raw)
-
-		join_clause = {
-			"type": "LEFT",
-			"left_table": f"{base_table} {left_alias}",
-			"left_key": left_key,
-			"right_table": f"{t} {right_alias}",
-			"right_key": right_key,
-			"condition": condition,
-		}
-		joins.append(join_clause)
-		joined_tables.add(t)
-
+    for t, condition in join_conditions_by_table.items():
+        if t == base_table or not t.strip() or t.lower() == "nan":
+            continue  # skip base or invalid/nan tables
+        if t in joined_tables:
+            continue  # avoid duplicates
+        left_alias = alias_map[base_table]
+        right_alias = alias_map[t]
+        left_key_raw, right_key_raw = parse_keys_from_condition(condition)
+        left_key = qualify_key(left_alias, left_key_raw)
+        right_key = qualify_key(right_alias, right_key_raw)
+        join_clause = {
+            "type": "LEFT",
+            "left_table": f"{base_table} {left_alias}",
+            "left_key": left_key,
+            "right_table": f"{t} {right_alias}",
+            "right_key": right_key,
+            "condition": condition,
+        }
+        joins.append(join_clause)
+        joined_tables.add(t)
 
     return {
         "from": base_from,
