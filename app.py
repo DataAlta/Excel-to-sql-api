@@ -457,7 +457,7 @@ def _apply_pattern(item: Dict[str, Any], pconf: Optional[Dict[str, Any]]) -> Dic
     if intent == "conditional_count":
         cond = params.get("condition")
         if not cond:
-            return {*item, "expression": "COUNT()", "note": "conditional_count missing condition → COUNT(*)"}
+            return {**item, "expression": "COUNT()", "note": "conditional_count missing condition → COUNT(*)"}
         return {**item, "expression": f"COUNT(CASE WHEN {cond} THEN 1 END)"}
 
     if intent == "text_match":
@@ -598,3 +598,4 @@ def health():
 
 # Mount router
 app.include_router(router)
+
