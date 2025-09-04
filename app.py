@@ -602,10 +602,11 @@ from fastapi import Body
 @router.post("/api/generate_sql_from_excel_mapping")
 async def generate_sql_from_excel_mapping(body: Dict[str, Any] = Body(...)):
     """
-    Accept JSON body with 'rows' key containing parsed mappings from Excel.
+    Accept JSON body with 'rows' and optionally 'base_table' keys.
     Infer SQL structure and generate SQL query string.
     Return the generated SQL text without running it.
     """
+
     rows = body.get("rows")
     if not rows or not isinstance(rows, list):
         raise HTTPException(status_code=400, detail="Missing or invalid 'rows' in request body.")
@@ -613,19 +614,34 @@ async def generate_sql_from_excel_mapping(body: Dict[str, Any] = Body(...)):
     # Step 1: Infer SQL structure from mapping rows
     sql_structure = await infer_sql_structure({"rows": rows})
 
-    # Compose payload for pattern-based SQL builder
-    base_from = sql_structure.get("from", "").split()
-    if len(base_from) >= 2:
-        base_table = base_from[0]
-        base_alias = base_from[1]
+    # Extract base_table from request body if provided, else use inferred
+    base_table_param = body.get("base_table")
+    if base_table_param:
+        # If alias is included in base_table_param string, split it
+        base_table_parts = base_table_param.strip().split()
+        if len(base_table_parts) >= 2:
+            base_table = base_table_parts[0]
+            base_alias = base_table_parts[1]
+        else:
+            base_table = base_table_parts[0]
+            base_alias = ""
     else:
-        base_table = base_from[0] if base_from else ""
-        base_alias = ""
+        # Use inferred base table and alias from inferred structure
+        base_from = sql_structure.get("from", "").split()
+        if len(base_from) >= 2:
+            base_table = base_from[0]
+            base_alias = base_from[1]
+        else:
+            base_table = base_from[0] if base_from else ""
+            base_alias = ""
 
     payload = {
         "from": {"table": base_table, "alias": base_alias},
         "select_items": sql_structure.get("select_items", []),
-        "joins": [f"{j['type']} JOIN {j['right_table']} ON {j['left_key']} = {j['right_key']}" for j in sql_structure.get("joins", [])],
+        "joins": [
+            f"{j['type']} JOIN {j['right_table']} ON {j['left_key']} = {j['right_key']}"
+            for j in sql_structure.get("joins", [])
+        ],
         "patterns": {}
     }
 
@@ -633,6 +649,7 @@ async def generate_sql_from_excel_mapping(body: Dict[str, Any] = Body(...)):
     sql_text = _build_sql_with_patterns(payload)
 
     return {"sql": sql_text}
+
 # =========================
 # 6) Save (stub)
 # =========================
