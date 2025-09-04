@@ -397,23 +397,28 @@ async def infer_sql_structure(body: Dict[str, Any]):
         if not ltbl or not rtbl:
             continue  # Must have both tables!
         # Skip duplicate joins (optional, your logic)
-        ltbl_norm = ltbl.strip()
-        rtbl_norm = rtbl.strip()
-
         join_key = tuple(sorted([ltbl, rtbl]))
         if join_key in joined_tables:
             continue
+        
+        # Normalize alias_map keys once after building it
+        alias_map = {k.strip().lower(): v for k, v in alias_map.items()}
+
+        # Normalize keys when looking up
+        ltbl_norm = ltbl.strip().lower()
+        rtbl_norm = rtbl.strip().lower()
 
         lalias = alias_map.get(ltbl_norm, "")
         ralias = alias_map.get(rtbl_norm, "")
 
+
         join_clause = {
             "type": "LEFT",
-            "left_table": f"{ltbl_norm} {lalias}".strip(),
+            "left_table": f"{ltbl} {lalias}".strip(),
             "left_key": f"{lalias}.{lcol}" if lalias else lcol,
-            "right_table": f"{rtbl_norm} {ralias}".strip(),
+            "right_table": f"{rtbl} {ralias}".strip(),
             "right_key": f"{ralias}.{rcol}" if ralias else rcol,
-            "condition": condition,
+            "condition": f"{lalias}.{lcol} = {ralias}.{rcol}" if lalias and ralias else condition,
         }
         joins.append(join_clause)
         joined_tables.add(join_key)
