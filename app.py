@@ -569,11 +569,18 @@ async def generate_sql_from_excel_mapping(body: Dict[str, Any] = Body(...)):
     sql_structure = await infer_sql_structure({"rows": rows})
 
     # Compose payload for pattern-based SQL builder
+    base_from = sql_structure.get("from", "").split()
+    if len(base_from) >= 2:
+        base_table = base_from[0]
+        base_alias = base_from[1]
+    else:
+        base_table = base_from[0] if base_from else ""
+        base_alias = ""
+
     payload = {
-        "from": {"table": sql_structure.get("from").split()[0] if sql_structure.get("from") else ""},
+        "from": {"table": base_table, "alias": base_alias},
         "select_items": sql_structure.get("select_items", []),
         "joins": [f"{j['type']} JOIN {j['right_table']} ON {j['left_key']} = {j['right_key']}" for j in sql_structure.get("joins", [])],
-        # Add empty patterns - can be enhanced to accept from body if needed
         "patterns": {}
     }
 
@@ -598,4 +605,5 @@ def health():
 
 # Mount router
 app.include_router(router)
+
 
