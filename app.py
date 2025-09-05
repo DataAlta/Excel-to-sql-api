@@ -452,25 +452,21 @@ async def infer_sql_structure(body: Dict[str, Any]):
         (ltbl, lcol), (rtbl, rcol) = parse_join_condition_sides(condition)
         if not ltbl or not rtbl:
             continue
-
         ltbl_norm = ltbl.strip()
         rtbl_norm = rtbl.strip()
-
         # Skip if both sides equal base table (degenerate join)
         if ltbl_norm.lower() == base_table.lower() and rtbl_norm.lower() == base_table.lower():
             continue
-
         join_key = tuple(sorted([ltbl_norm.lower(), rtbl_norm.lower()]))
         if join_key in joined_tables:
             continue
-
         # Aliases with fallback
         lalias = alias_map.get(ltbl_norm.lower(), ltbl_norm[:1].upper())
         ralias = alias_map.get(rtbl_norm.lower(), rtbl_norm[:1].upper())
 
         display_left_table, display_left_key, display_left_alias = ltbl_norm, lcol, lalias
         display_right_table, display_right_key, display_right_alias = rtbl_norm, rcol, ralias
-
+        
         # Always swap if base table is on left, so base on right
         if display_left_table.lower() == base_table.lower():
             display_left_table, display_right_table = display_right_table, display_left_table
@@ -489,13 +485,15 @@ async def infer_sql_structure(body: Dict[str, Any]):
             display_left_table, display_right_table = display_right_table, display_left_table
             display_left_key, display_right_key = display_right_key, display_left_key
             display_left_alias, display_right_alias = display_right_alias, display_left_alias
-            display_condition = f"{display_left_alias}.{display_left_key} = {display_right_alias}.{display_right_key}"
+
+        display_condition = f"{display_left_alias}.{display_left_key} = {display_right_alias}.{display_right_key}"
 
         left_key_str = f"{display_left_alias}.{display_left_key}"
         right_key_str = f"{display_right_alias}.{display_right_key}"
         condition_str = f"{left_key_str} = {right_key_str}"
 
         used_left_tables.add(display_left_table.lower())
+
         join_clause = {
             "type": "LEFT",
             "left_table": f"{display_left_table} {display_left_alias}".strip(),
