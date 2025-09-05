@@ -463,37 +463,31 @@ async def infer_sql_structure(body: Dict[str, Any]):
         # Aliases with fallback
         lalias = alias_map.get(ltbl_norm.lower(), ltbl_norm[:1].upper())
         ralias = alias_map.get(rtbl_norm.lower(), rtbl_norm[:1].upper())
-
         display_left_table, display_left_key, display_left_alias = ltbl_norm, lcol, lalias
         display_right_table, display_right_key, display_right_alias = rtbl_norm, rcol, ralias
-        
-        # Always swap if base table is on left, so base on right
-        if display_left_table.lower() == base_table.lower():
-            display_left_table, display_right_table = display_right_table, display_left_table
-            display_left_key, display_right_key = display_right_key, display_left_key
-            display_left_alias, display_right_alias = display_right_alias, display_left_alias
 
-        # Swap if left table duplicate (and not base), and right table not duplicate or is base
+        # 1. Swap if left table duplicate (and not base), 
+        #    and right table not duplicate or is base
         if (display_left_table.lower() in used_left_tables and display_left_table.lower() != base_table.lower()):
             if display_right_table.lower() not in used_left_tables or display_right_table.lower() == base_table.lower():
                 display_left_table, display_right_table = display_right_table, display_left_table
                 display_left_key, display_right_key = display_right_key, display_left_key
                 display_left_alias, display_right_alias = display_right_alias, display_left_alias
 
-        # FINAL ENFORCEMENT: Force base table never to be on the left (must always run last)
+        # 2. FINAL ENFORCEMENT: Force base table never to be on the left (must always run last)
         if display_left_table.lower() == base_table.lower():
             display_left_table, display_right_table = display_right_table, display_left_table
             display_left_key, display_right_key = display_right_key, display_left_key
             display_left_alias, display_right_alias = display_right_alias, display_left_alias
 
+        # Now build the display_condition (and related condition strings)
         display_condition = f"{display_left_alias}.{display_left_key} = {display_right_alias}.{display_right_key}"
-
         left_key_str = f"{display_left_alias}.{display_left_key}"
         right_key_str = f"{display_right_alias}.{display_right_key}"
         condition_str = f"{left_key_str} = {right_key_str}"
 
+        # Only after all swaps/sanity checks, record the left table!
         used_left_tables.add(display_left_table.lower())
-
         join_clause = {
             "type": "LEFT",
             "left_table": f"{display_left_table} {display_left_alias}".strip(),
