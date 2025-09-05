@@ -392,105 +392,80 @@ async def infer_sql_structure(body: Dict[str, Any]):
         base_alias = base_table[:1].upper() if base_table else "T"
 
     base_from = f"{base_table} {base_alias}"
+	
+	# ----------------- Preprocessing Step: Realign join sides to base table -----------------
+	for pr in parsed_rows:
+		join_cond = pr.get("join", "")
+		if not join_cond:
+			continue
+		(ltbl, lcol), (rtbl, rcol) = parse_join_condition_sides(join_cond)
+		# If the left table is the base, swap so base is always on the right
+		if ltbl.lower() == base_table.lower() and rtbl.lower() != base_table.lower():
+			# Swap so base_table is always right
+			pr["table"], pr["column"] = rtbl, rcol
+			pr["join"] = f"{ltbl}.{lcol} = {rtbl}.{rcol}"  # base (rtbl.rcol) always on right
+	# ----------------- End Preprocessing Step -----------------
 
-    # ----------------- Preprocessing Step: Realign join sides to base table -----------------
-    for pr in parsed_rows:
-          join_cond = pr.get("join", "")
-          if not join_cond:
-                continue
-          (ltbl, lcol), (rtbl, rcol) = parse_join_condition_sides(join_cond)
-          # If the left table is the base, swap so base is always on the right
-          if ltbl.lower() == base_table.lower() and rtbl.lower() != base_table.lower():
-                # Swap so base_table is always right
-                pr["table"], pr["column"] = rtbl, rcol
-                pr["join"] = f"{ltbl}.{lcol} = {rtbl}.{rcol}"  # base (rtbl.rcol) always on right
+	# Then continue with selective items, join construction, etc.
+	select_items = []
+	for pr in parsed_rows:
+		t, a, col, out, tr = pr["table"], alias_map[pr["table"]], pr["column"], pr["output"], pr["transform"]
+		expr = tr if tr else f"{a}.{col}"
+		alias_for_output = (out.replace(" ", "") or col)
+		select_items.append({"output": out, "expression": expr, "alias": alias_for_output})
 
-    # ----------------- End Preprocessing Step -----------------
-    
-    select_items = []
-    for pr in parsed_rows:
-        t, a, col, out, tr = pr["table"], alias_map[pr["table"]], pr["column"], pr["output"], pr["transform"]
-        expr = tr if tr else f"{a}.{col}"
-        alias_for_output = (out.replace(" ", "") or col)
-        select_items.append({"output": out, "expression": expr, "alias": alias_for_output})
+	join_conditions_by_table: Dict[str, str] = {}
+	for pr in parsed_rows:
+		t = pr["table"]
+		join_cond = pr.get("join", "").strip()
+		if join_cond:
+			join_conditions_by_table[t] = join_cond
+		else:
+			if t in join_conditions_by_table:
+				pr["join"] = join_conditions_by_table[t]
 
-    # Track join condition per table to reuse if missing
-    join_conditions_by_table: Dict[str, str] = {}
-    for pr in parsed_rows:
-        t = pr["table"]
-        join_cond = pr.get("join", "").strip()
-        if join_cond:
-            join_conditions_by_table[t] = join_cond
-        else:
-            # Fill missing join with previous condition if exists
-            if t in join_conditions_by_table:
-                pr["join"] = join_conditions_by_table[t]
+	joins = []
+	joined_tables = set()
+	alias_map = {k.strip().lower(): v for k, v in alias_map.items()}
+	old_base_alias = None
+	if base_table in alias_map:
+		old_base_alias = alias_map[base_table].lower()
 
+	for t, condition in join_conditions_by_table.items():
+		if t == base_table or not t.strip() or t.lower() == "nan":
+			continue
+		(ltbl, lcol), (rtbl, rcol) = parse_join_condition_sides(condition)
+		if not ltbl or not rtbl:
+			continue
+		ltbl_norm = ltbl.strip().lower()
+		rtbl_norm = rtbl.strip().lower()
+		join_key = tuple(sorted([ltbl_norm, rtbl_norm]))
+		if join_key in joined_tables:
+			continue
+		lalias = alias_map.get(ltbl_norm, "")
+		ralias = alias_map.get(rtbl_norm, "")
+		base_alias_lower = base_alias.lower()
+		if old_base_alias and lalias.lower() == old_base_alias:
+			lalias_fixed = base_alias
+		else:
+			lalias_fixed = lalias
+		if old_base_alias and ralias.lower() == old_base_alias:
+			ralias_fixed = base_alias
+		else:
+			ralias_fixed = ralias
 
-    # After alias_map and base_alias are determined
-    # We'll update join keys to reflect new base_alias consistently
+		base_table_lower = base_table.lower()
+		ltbl_lower = ltbl.lower()
+		rtbl_lower = rtbl.lower()
 
-    joins = []
-    joined_tables = set()
-
-    # Normalize alias_map keys once after building it
-    alias_map = {k.strip().lower(): v for k, v in alias_map.items()}
-
-    # Old base alias (to be replaced in keys)
-    old_base_alias = None
-    if base_table in alias_map:
-        old_base_alias = alias_map[base_table].lower()
-
-    for t, condition in join_conditions_by_table.items():
-        if t == base_table or not t.strip() or t.lower() == "nan":
-            continue  # skip base or invalid/nan tables
-
-        # Parse both sides of the join condition
-        (ltbl, lcol), (rtbl, rcol) = parse_join_condition_sides(condition)
-        if not ltbl or not rtbl:
-            continue  # Must have both tables!
-
-        # Normalize keys when looking up
-        ltbl_norm = ltbl.strip().lower()
-        rtbl_norm = rtbl.strip().lower()
-
-        # Skip duplicate joins (optional, your logic)
-        join_key = tuple(sorted([ltbl_norm, rtbl_norm]))
-        if join_key in joined_tables:
-            continue
-
-        lalias = alias_map.get(ltbl_norm, "")
-        ralias = alias_map.get(rtbl_norm, "")
-
-        # **Fix join keys to replace old base alias with current base alias**
-        # This handles the case when base table alias has changed and join keys reference old alias
-        # Normalize aliases for comparison
-        base_alias_lower = base_alias.lower()
-        if old_base_alias and lalias.lower() == old_base_alias:
-            lalias_fixed = base_alias
-        else:
-            lalias_fixed = lalias
-
-        if old_base_alias and ralias.lower() == old_base_alias:
-            ralias_fixed = base_alias
-        else:
-            ralias_fixed = ralias
-        
-        # Normalize lower-case for comparisons
-        base_table_lower = base_table.lower()
-        ltbl_lower = ltbl.lower()
-        rtbl_lower = rtbl.lower()
-		
 		# in your join construction loop:
 		if rtbl_lower == base_table_lower:
-			# base is already on right -- as desired, do nothing
 			display_left_table = ltbl
 			display_left_key = lalias_fixed + '.' + lcol if lalias_fixed else lcol
 			display_right_table = rtbl
 			display_right_key = ralias_fixed + '.' + rcol if ralias_fixed else rcol
 			display_condition = f"{display_right_key} = {display_left_key}" if swap_condition else f"{display_left_key} = {display_right_key}"
 		elif ltbl_lower == base_table_lower:
-			# base is on left -- swap to right
 			display_left_table = rtbl
 			display_left_key = ralias_fixed + '.' + rcol if ralias_fixed else rcol
 			display_right_table = ltbl
@@ -503,7 +478,6 @@ async def infer_sql_structure(body: Dict[str, Any]):
 			display_right_key = ralias_fixed + '.' + rcol if ralias_fixed else rcol
 			display_condition = f"{display_left_key} = {display_right_key}"
 
-		# Then:
 		join_clause = {
 			"type": "LEFT",
 			"left_table": display_left_table,
@@ -512,11 +486,9 @@ async def infer_sql_structure(body: Dict[str, Any]):
 			"right_key": display_right_key,
 			"condition": display_condition,
 		}
+		joins.append(join_clause)
+		joined_tables.add(join_key)
 
-        
-        joins.append(join_clause)
-        joined_tables.add(join_key)
-    
     return {
         "from": base_from,
         "select_items": select_items,
