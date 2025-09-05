@@ -461,14 +461,26 @@ async def infer_sql_structure(body: Dict[str, Any]):
             ralias_fixed = base_alias
         else:
             ralias_fixed = ralias
+        
+        # Normalize lower-case for comparisons
+        base_table_lower = base_table.lower()
+        ltbl_lower = ltbl.lower()
+        rtbl_lower = rtbl.lower()
 
-        # Build join tables with aliases
-        left_table = f"{ltbl} {lalias_fixed}".strip()
-        right_table = f"{rtbl} {ralias_fixed}".strip()
+        # Automatically position the base table on the left side of the join
+        if rtbl_lower == base_table_lower and ltbl_lower != base_table_lower:
+            # Swap left/right tables and keys
+            left_table = f"{rtbl} {ralias_fixed}".strip()
+            right_table = f"{ltbl} {lalias_fixed}".strip()
+            left_key = f"{ralias_fixed}.{rcol}" if ralias_fixed else rcol
+            right_key = f"{lalias_fixed}.{lcol}" if lalias_fixed else lcol
+        else:
+            # Normal join construction
+            left_table = f"{ltbl} {lalias_fixed}".strip()
+            right_table = f"{rtbl} {ralias_fixed}".strip()
+            left_key = f"{lalias_fixed}.{lcol}" if lalias_fixed else lcol
+            right_key = f"{ralias_fixed}.{rcol}" if ralias_fixed else rcol
 
-        # Build condition replacing old alias with new alias in keys
-        left_key = f"{lalias_fixed}.{lcol}" if lalias_fixed else lcol
-        right_key = f"{ralias_fixed}.{rcol}" if ralias_fixed else rcol
         condition_str = f"{left_key} = {right_key}" if lalias_fixed and ralias_fixed else condition
 
         join_clause = {
@@ -695,3 +707,4 @@ def health():
 
 # Mount router
 app.include_router(router)
+
