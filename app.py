@@ -454,47 +454,54 @@ async def infer_sql_structure(body: Dict[str, Any]):
             continue
         ltbl_norm = ltbl.strip()
         rtbl_norm = rtbl.strip()
-        # Skip if both are base table
+
+        # Debug print base table equality checks
+        print(f"Comparing base table '{base_table.lower()}' with left '{ltbl_norm.lower()}' and right '{rtbl_norm.lower()}'")
+
         if ltbl_norm.lower() == base_table.lower() and rtbl_norm.lower() == base_table.lower():
+            print(f"Skipping degenerate join where both sides are base table: {ltbl_norm} = {rtbl_norm}")
             continue
         join_key = tuple(sorted([ltbl_norm.lower(), rtbl_norm.lower()]))
         if join_key in joined_tables:
+            print(f"Skipping join because join_key {join_key} already processed")
             continue
 
-        # Aliases with fallback
         lalias = alias_map.get(ltbl_norm.lower(), ltbl_norm[:1].upper())
         ralias = alias_map.get(rtbl_norm.lower(), rtbl_norm[:1].upper())
-        left, left_key, left_alias = ltbl_norm, lcol, lalias
-        right, right_key, right_alias = rtbl_norm, rcol, ralias
+        display_left_table, display_left_key, display_left_alias = ltbl_norm, lcol, lalias
+        display_right_table, display_right_key, display_right_alias = rtbl_norm, rcol, ralias
 
-        # Uniqueness: try to avoid a duplicate left (not base)
-        if left.lower() in used_left_tables and left.lower() != base_table.lower() and \
-           (right.lower() not in used_left_tables or right.lower() == base_table.lower()):
-            left, right = right, left
-            left_key, right_key = right_key, left_key
-            left_alias, right_alias = right_alias, left_alias
+        print(f"Initial join: {display_left_table} ({display_left_alias}.{display_left_key}) = {display_right_table} ({display_right_alias}.{display_right_key})")
 
-        # ----------------------------------------------------------------
-        # ***FINAL: Base table must never be left: enforce after all swaps***
-        # ----------------------------------------------------------------
-        if left.lower() == base_table.lower():
-            left, right = right, left
-            left_key, right_key = right_key, left_key
-            left_alias, right_alias = right_alias, left_alias
+        if (display_left_table.lower() in used_left_tables and display_left_table.lower() != base_table.lower()):
+            if display_right_table.lower() not in used_left_tables or display_right_table.lower() == base_table.lower():
+                print(f"Swapping for uniqueness: left_table '{display_left_table}' already used; swapping with right_table '{display_right_table}'")
+                display_left_table, display_right_table = display_right_table, display_left_table
+                display_left_key, display_right_key = display_right_key, display_left_key
+                display_left_alias, display_right_alias = display_right_alias, display_left_alias
 
-        # Build result
-        display_condition = f"{left_alias}.{left_key} = {right_alias}.{right_key}"
-        left_key_str = f"{left_alias}.{left_key}"
-        right_key_str = f"{right_alias}.{right_key}"
+        if display_left_table.lower() == base_table.lower():
+            print(f"Final enforcement swap because base table '{base_table}' is on the left; swapping sides")
+            display_left_table, display_right_table = display_right_table, display_left_table
+            display_left_key, display_right_key = display_right_key, display_left_key
+            display_left_alias, display_right_alias = display_right_alias, display_left_alias
 
-        used_left_tables.add(left.lower())
+        display_condition = f"{display_left_alias}.{display_left_key} = {display_right_alias}.{display_right_key}"
+        left_key_str = f"{display_left_alias}.{display_left_key}"
+        right_key_str = f"{display_right_alias}.{display_right_key}"
+        condition_str = f"{left_key_str} = {right_key_str}"
+
+        used_left_tables.add(display_left_table.lower())
+
+        print(f"Final join clause: LEFT TABLE = {display_left_table} ({left_key_str}), RIGHT TABLE = {display_right_table} ({right_key_str}), CONDITION = {display_condition}")
+
         join_clause = {
             "type": "LEFT",
-            "left_table": f"{left} {left_alias}".strip(),
+            "left_table": f"{display_left_table} {display_left_alias}".strip(),
             "left_key": left_key_str,
-            "right_table": f"{right} {right_alias}".strip(),
+            "right_table": f"{display_right_table} {display_right_alias}".strip(),
             "right_key": right_key_str,
-            "condition": display_condition,
+            "condition": condition_str,
         }
         joins.append(join_clause)
         joined_tables.add(join_key)
