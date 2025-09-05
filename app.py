@@ -454,47 +454,47 @@ async def infer_sql_structure(body: Dict[str, Any]):
             continue
         ltbl_norm = ltbl.strip()
         rtbl_norm = rtbl.strip()
-        # Skip if both sides equal base table (degenerate join)
+        # Skip if both are base table
         if ltbl_norm.lower() == base_table.lower() and rtbl_norm.lower() == base_table.lower():
             continue
         join_key = tuple(sorted([ltbl_norm.lower(), rtbl_norm.lower()]))
         if join_key in joined_tables:
             continue
+
         # Aliases with fallback
         lalias = alias_map.get(ltbl_norm.lower(), ltbl_norm[:1].upper())
         ralias = alias_map.get(rtbl_norm.lower(), rtbl_norm[:1].upper())
-        display_left_table, display_left_key, display_left_alias = ltbl_norm, lcol, lalias
-        display_right_table, display_right_key, display_right_alias = rtbl_norm, rcol, ralias
+        left, left_key, left_alias = ltbl_norm, lcol, lalias
+        right, right_key, right_alias = rtbl_norm, rcol, ralias
 
-        # 1. Swap if left table duplicate (and not base), 
-        #    and right table not duplicate or is base
-        if (display_left_table.lower() in used_left_tables and display_left_table.lower() != base_table.lower()):
-            if display_right_table.lower() not in used_left_tables or display_right_table.lower() == base_table.lower():
-                display_left_table, display_right_table = display_right_table, display_left_table
-                display_left_key, display_right_key = display_right_key, display_left_key
-                display_left_alias, display_right_alias = display_right_alias, display_left_alias
+        # Uniqueness: try to avoid a duplicate left (not base)
+        if left.lower() in used_left_tables and left.lower() != base_table.lower() and \
+           (right.lower() not in used_left_tables or right.lower() == base_table.lower()):
+            left, right = right, left
+            left_key, right_key = right_key, left_key
+            left_alias, right_alias = right_alias, left_alias
 
-        # 2. FINAL ENFORCEMENT: Force base table never to be on the left (must always run last)
-        if display_left_table.lower() == base_table.lower():
-            display_left_table, display_right_table = display_right_table, display_left_table
-            display_left_key, display_right_key = display_right_key, display_left_key
-            display_left_alias, display_right_alias = display_right_alias, display_left_alias
+        # ----------------------------------------------------------------
+        # ***FINAL: Base table must never be left: enforce after all swaps***
+        # ----------------------------------------------------------------
+        if left.lower() == base_table.lower():
+            left, right = right, left
+            left_key, right_key = right_key, left_key
+            left_alias, right_alias = right_alias, left_alias
 
-        # Now build the display_condition (and related condition strings)
-        display_condition = f"{display_left_alias}.{display_left_key} = {display_right_alias}.{display_right_key}"
-        left_key_str = f"{display_left_alias}.{display_left_key}"
-        right_key_str = f"{display_right_alias}.{display_right_key}"
-        condition_str = f"{left_key_str} = {right_key_str}"
+        # Build result
+        display_condition = f"{left_alias}.{left_key} = {right_alias}.{right_key}"
+        left_key_str = f"{left_alias}.{left_key}"
+        right_key_str = f"{right_alias}.{right_key}"
 
-        # Only after all swaps/sanity checks, record the left table!
-        used_left_tables.add(display_left_table.lower())
+        used_left_tables.add(left.lower())
         join_clause = {
             "type": "LEFT",
-            "left_table": f"{display_left_table} {display_left_alias}".strip(),
+            "left_table": f"{left} {left_alias}".strip(),
             "left_key": left_key_str,
-            "right_table": f"{display_right_table} {display_right_alias}".strip(),
+            "right_table": f"{right} {right_alias}".strip(),
             "right_key": right_key_str,
-            "condition": condition_str,
+            "condition": display_condition,
         }
         joins.append(join_clause)
         joined_tables.add(join_key)
