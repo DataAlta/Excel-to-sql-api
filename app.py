@@ -377,7 +377,7 @@ async def infer_sql_structure(body: Dict[str, Any]):
     if not parsed_rows:
         return {"from": "", "select_items": [], "joins": [], "message": "No complete mapping rows to infer from"}
 
-    base_table = base_table_from_request if base_table_from_request else max(table_counts.items(), key=lambda kv: kv[1])[0]
+    #base_table = base_table_from_request if base_table_from_request else max(table_counts.items(), key=lambda kv: kv[1])[0]
     alias_map: Dict[str, str] = {}
     used = set()
 
@@ -735,3 +735,4 @@ def health():
 
 # Mount router
 app.include_router(router)
+
