@@ -377,7 +377,7 @@ async def infer_sql_structure(body: Dict[str, Any]):
     if not parsed_rows:
         return {"from": "", "select_items": [], "joins": [], "message": "No complete mapping rows to infer from"}
 
-    #base_table = base_table_from_request if base_table_from_request else max(table_counts.items(), key=lambda kv: kv[1])[0]
+    base_table = base_table_from_request if base_table_from_request else max(table_counts.items(), key=lambda kv: kv[1])[0]
     alias_map: Dict[str, str] = {}
     used = set()
 
@@ -703,15 +703,63 @@ async def generate_sql_from_excel_mapping(body: Dict[str, Any] = Body(...)):
             base_table = base_from[0] if base_from else ""
             base_alias = ""
 
+    def parse_table_str(tbl_str: str):
+        """Return (table, alias) for a string like 'Loans L' """
+        if not tbl_str:
+            return "", ""
+        parts = tbl_str.strip().split()
+        if len(parts) >= 2:
+            return parts[0], parts[1]
+        return parts[0], ""
+
+    # decide base_table/base_alias already done above...
+
+    joins_out = []
+    for j in sql_structure.get("joins", []):
+        # Expecting j to contain left_table, left_key, right_table, right_key, type
+        left_tbl_raw = j.get("left_table", "")
+        right_tbl_raw = j.get("right_table", "")
+        left_table, left_alias = parse_table_str(left_tbl_raw)
+        right_table, right_alias = parse_table_str(right_tbl_raw)
+
+        # Which side is the base? compare table name OR full raw string (be permissive)
+        base_name_matches_left = (
+            base_table and (base_table == left_table or base_table == left_tbl_raw or base_alias == left_alias)
+        )
+        base_name_matches_right = (
+            base_table and (base_table == right_table or base_table == right_tbl_raw or base_alias == right_alias)
+        )
+
+        # Determine which table should appear after JOIN (the one that's NOT the base)
+        if base_name_matches_left and not base_name_matches_right:
+            join_target_raw = right_tbl_raw
+            # ON should use left_key = right_key (left side refers to base)
+            on_left = j.get("left_key")
+            on_right = j.get("right_key")
+        elif base_name_matches_right and not base_name_matches_left:
+            join_target_raw = left_tbl_raw
+            # ON should use right_key = left_key (right side refers to base) — keep readable as left = right
+            # but ensure we place the base side on the right of the equals if you prefer consistent ordering
+            on_left = j.get("right_key")
+            on_right = j.get("left_key")
+        else:
+            # If we can't detect base (both sides ambiguous), fallback to original left_table as join target
+            join_target_raw = left_tbl_raw
+            on_left = j.get("left_key")
+            on_right = j.get("right_key")
+
+        join_type = j.get("type", "LEFT").upper()
+        # Build final join clause (preserve raw strings which may already contain aliases)
+        join_clause = f"{join_type} JOIN {join_target_raw} ON {on_left} = {on_right}"
+        joins_out.append(join_clause)
+
     payload = {
         "from": {"table": base_table, "alias": base_alias},
         "select_items": sql_structure.get("select_items", []),
-        "joins": [
-            f"{j['type']} JOIN {j['left_table']} ON {j['left_key']} = {j['right_key']}"
-            for j in sql_structure.get("joins", [])
-        ],
+        "joins": joins_out,
         "patterns": {}
     }
+
 
     # Step 2: Generate SQL string (text only)
     sql_text = _build_sql_with_patterns(payload)
@@ -735,5 +783,3 @@ def health():
 
 # Mount router
 app.include_router(router)
-
-
