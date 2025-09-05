@@ -309,18 +309,15 @@ async def infer_sql_structure(body: Dict[str, Any]):
     rows = body.get("rows") or []
     if not isinstance(rows, list) or not rows:
         return {"from": "", "select_items": [], "joins": [], "message": "No mapping rows provided"}
-
     base_table_from_request = body.get("base_table")
 
     def split_table_alias(t: str) -> Dict[str, str]:
         t = (t or "").strip()
         if not t:
             return {"table": "", "alias": ""}
-        # Split on whitespace(s) to handle multiple spaces/tabs
         parts = t.split()
         if len(parts) >= 2:
             table_name = " ".join(parts[:-1]).strip()
-            # Remove schema prefix if present
             if "." in table_name:
                 table_name = table_name.split(".", 1)[1]
             return {"table": table_name, "alias": parts[-1].strip()}
@@ -329,6 +326,27 @@ async def infer_sql_structure(body: Dict[str, Any]):
             table_name = table_name.split(".", 1)[1]
         return {"table": table_name, "alias": ""}
 
+    # --- NEW: function to get base table clean name without alias ---
+    def get_base_table_name(t: str) -> str:
+        if not t:
+            return ""
+        # Split by space and take first part as pure table name
+        return t.split()[0].strip()
+
+    # Use this to normalize base table to pure table name string
+    base_table = ""
+    if base_table_from_request:
+        base_table = get_base_table_name(base_table_from_request)
+    else:
+        # fallback: choose most frequent table name from rows (without alias)
+        table_counts: Dict[str, int] = {}
+        for r in rows:
+            t_raw = (r.get("table") or "").strip()
+            ta = split_table_alias(t_raw)
+            table = ta["table"]
+            table_counts[table] = table_counts.get(table, 0) + 1
+        if table_counts:
+            base_table = max(table_counts.items(), key=lambda kv: kv[1])[0]
 
     table_counts: Dict[str, int] = {}
     table_columns: Dict[str, set] = {}
