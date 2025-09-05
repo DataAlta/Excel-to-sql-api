@@ -426,63 +426,76 @@ async def infer_sql_structure(body: Dict[str, Any]):
 
     joins = []
     joined_tables = set()
+    # Normalize alias_map keys and values to lowercase (if alias_map is a dict)
     alias_map = {k.strip().lower(): v for k, v in alias_map.items()}
+
     old_base_alias = None
     if base_table in alias_map:
         old_base_alias = alias_map[base_table].lower()
 
-    used_left_tables = set()
-
+    # Track counts of joins having each left table
+    left_table_counts = {}
     for t, condition in join_conditions_by_table.items():
-        if t == base_table or not t.strip() or t.lower() == "nan":
+        if not t.strip() or t.lower() == "nan":
             continue
         (ltbl, lcol), (rtbl, rcol) = parse_join_condition_sides(condition)
         if not ltbl or not rtbl:
+            continue
+        ltbl_norm = ltbl.strip()
+        # Count occurrences of left tables
+        left_table_counts[ltbl_norm.lower()] = left_table_counts.get(ltbl_norm.lower(), 0) + 1
+
+    used_left_tables = set()
+    for t, condition in join_conditions_by_table.items():
+        if not t.strip() or t.lower() == "nan":
+            continue
+        (ltbl, lcol), (rtbl, rcol) = parse_join_condition_sides(condition)
+        if not ltbl or not rtbl:
+            continue
+        # Skip join only if BOTH left and right tables equal base table
+        if (
+            ltbl.strip().lower() == base_table.lower()
+            and rtbl.strip().lower() == base_table.lower()
+        ):
             continue
         ltbl_norm = ltbl.strip()
         rtbl_norm = rtbl.strip()
         join_key = tuple(sorted([ltbl_norm.lower(), rtbl_norm.lower()]))
         if join_key in joined_tables:
             continue
-        lalias = alias_map.get(ltbl_norm.lower(), "")
-        ralias = alias_map.get(rtbl_norm.lower(), "")
-        base_alias_lower = base_alias.lower() if base_alias else ""
 
-        base_on_left = (ltbl_norm.lower() == base_table.lower()) or (lalias.lower() == base_alias_lower)
-        base_on_right = (rtbl_norm.lower() == base_table.lower()) or (ralias.lower() == base_alias_lower)
+        # Prepare aliases
+        lalias = alias_map.get(ltbl_norm.lower(), ltbl_norm[:1].upper())
+        ralias = alias_map.get(rtbl_norm.lower(), rtbl_norm[:1].upper())
 
-        # Put base always on right
-        if base_on_left and not base_on_right:
-            display_left_table, display_left_key, display_left_alias = rtbl_norm, rcol, ralias
-            display_right_table, display_right_key, display_right_alias = ltbl_norm, lcol, lalias
-            display_condition = f"{display_right_alias}.{display_right_key} = {display_left_alias}.{display_left_key}"
-        else:
-            display_left_table, display_left_key, display_left_alias = ltbl_norm, lcol, lalias
-            display_right_table, display_right_key, display_right_alias = rtbl_norm, rcol, ralias
-            display_condition = f"{display_left_alias}.{display_left_key} = {display_right_alias}.{display_right_key}"
+        # Default: no swap
+        display_left_table, display_left_key, display_left_alias = ltbl_norm, lcol, lalias
+        display_right_table, display_right_key, display_right_alias = rtbl_norm, rcol, ralias
+        display_condition = f"{display_left_alias}.{display_left_key} = {display_right_alias}.{display_right_key}"
 
-        # Swap to avoid duplicate left tables, except if base is involved on left side
-        if display_left_table in used_left_tables and display_left_table != base_table and display_right_table != base_table:
-            # swap sides to avoid duplicate left table
-            display_left_table, display_right_table = display_right_table, display_left_table
-            display_left_key, display_right_key = display_right_key, display_left_key
-            display_left_alias, display_right_alias = display_right_alias, display_left_alias
-            display_condition = f"{display_left_alias}.{display_left_key} = {display_right_alias}.{display_right_key}"
+        # === MAIN SWAP LOGIC ===
+        # Rule 1: Ensure left table is unique (except base allowed multiple times)
+        # Try swapping if we can achieve that
+        if display_left_table in used_left_tables and display_left_table != base_table:
+            # Try swap: only if right table isn't already a left table or is base table
+            if display_right_table not in used_left_tables or display_right_table == base_table:
+                display_left_table, display_right_table = display_right_table, display_left_table
+                display_left_key, display_right_key = display_right_key, display_left_key
+                display_left_alias, display_right_alias = display_right_alias, display_left_alias
+                display_condition = f"{display_left_alias}.{display_left_key} = {display_right_alias}.{display_right_key}"
 
+        # Record and continue
         used_left_tables.add(display_left_table)
-
         join_clause = {
             "type": "LEFT",
-            "left_table": display_left_table,
+            "left_table": f"{display_left_table} {display_left_alias}".strip(),
             "left_key": f"{display_left_alias}.{display_left_key}" if display_left_alias else display_left_key,
-            "right_table": display_right_table,
+            "right_table": f"{display_right_table} {display_right_alias}".strip(),
             "right_key": f"{display_right_alias}.{display_right_key}" if display_right_alias else display_right_key,
             "condition": display_condition,
         }
         joins.append(join_clause)
         joined_tables.add(join_key)
-
-    base_table_options = sorted(used_left_tables)
 
     return {
         "from": base_from,
