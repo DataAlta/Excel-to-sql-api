@@ -481,30 +481,38 @@ async def infer_sql_structure(body: Dict[str, Any]):
         ltbl_lower = ltbl.lower()
         rtbl_lower = rtbl.lower()
 
-        # Automatically position the base table on the left side of the join
-        if ltbl_lower == base_table_lower and rtbl_lower != base_table_lower:
-            # Swap left/right tables and keys
-            left_table = f"{rtbl} {ralias_fixed}".strip()
-            right_table = f"{ltbl} {lalias_fixed}".strip()
-            left_key = f"{ralias_fixed}.{rcol}" if ralias_fixed else rcol
-            right_key = f"{lalias_fixed}.{lcol}" if lalias_fixed else lcol
+		# in your join construction loop:
+        if rtbl.lower() == base_table.lower():
+           # base is already on right -- as desired, do nothing
+           display_left_table = ltbl
+           display_left_key = lalias_fixed + '.' + lcol if lalias_fixed else lcol
+           display_right_table = rtbl
+           display_right_key = ralias_fixed + '.' + rcol if ralias_fixed else rcol
+           display_condition = f"{display_right_key} = {display_left_key}" if swap_condition else f"{display_left_key} = {display_right_key}"
+        elif ltbl.lower() == base_table.lower():
+           # base is on left -- swap to right
+           display_left_table = rtbl
+           display_left_key = ralias_fixed + '.' + rcol if ralias_fixed else rcol
+           display_right_table = ltbl
+           display_right_key = lalias_fixed + '.' + lcol if lalias_fixed else lcol
+           display_condition = f"{display_right_key} = {display_left_key}" if swap_condition else f"{display_left_key} = {display_right_key}"
         else:
-            # Normal join construction
-            left_table = f"{ltbl} {lalias_fixed}".strip()
-            right_table = f"{rtbl} {ralias_fixed}".strip()
-            left_key = f"{lalias_fixed}.{lcol}" if lalias_fixed else lcol
-            right_key = f"{ralias_fixed}.{rcol}" if ralias_fixed else rcol
+           display_left_table = ltbl
+           display_left_key = lalias_fixed + '.' + lcol if lalias_fixed else lcol
+           display_right_table = rtbl
+           display_right_key = ralias_fixed + '.' + rcol if ralias_fixed else rcol
+           display_condition = f"{display_left_key} = {display_right_key}"
 
-        condition_str = f"{left_key} = {right_key}" if lalias_fixed and ralias_fixed else condition
-
+        # Then:
         join_clause = {
             "type": "LEFT",
-            "left_table": left_table,
-            "left_key": left_key,
-            "right_table": right_table,
-            "right_key": right_key,
-            "condition": condition_str,
+            "left_table": display_left_table,
+            "left_key": display_left_key,
+            "right_table": display_right_table,
+            "right_key": display_right_key,
+            "condition": display_condition,
         }
+        
         joins.append(join_clause)
         joined_tables.add(join_key)
 
@@ -721,6 +729,7 @@ def health():
 
 # Mount router
 app.include_router(router)
+
 
 
 
