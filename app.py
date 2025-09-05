@@ -703,55 +703,84 @@ async def generate_sql_from_excel_mapping(body: Dict[str, Any] = Body(...)):
             base_table = base_from[0] if base_from else ""
             base_alias = ""
 
-    def parse_table_str(tbl_str: str):
-        """Return (table, alias) for a string like 'Loans L' """
-        if not tbl_str:
-            return "", ""
-        parts = tbl_str.strip().split()
-        if len(parts) >= 2:
-            return parts[0], parts[1]
-        return parts[0], ""
+    # --- insert near other helpers, re-using your existing "re" import ---
+    def _parse_table_str(raw: str) -> Dict[str,str]:
+        """Return normalized dict: raw, table (no schema), alias."""
+        if not raw or not isinstance(raw, str):
+            return {"raw": "", "table": "", "alias": ""}
+        s = raw.strip()
+        s = re.sub(r"\s+", " ", s)
+        s = re.sub(r"\s+AS\s+", " ", s, flags=re.I)
+        parts = s.split(" ")
+        table = parts[0] if parts else ""
+        # if schema present like dbo.Customers, strip schema
+        if "." in table:
+            table = table.split(".", 1)[1]
+        alias = parts[1] if len(parts) > 1 else ""
+        return {"raw": s, "table": table, "alias": alias}
 
-    # decide base_table/base_alias already done above...
+    def _norm(s: str) -> str:
+        return (s or "").strip().lower()
+
+    # --- decide base_table/base_alias (you already have this earlier) ---
+    # base_table, base_alias variables already computed above
+    base_table_norm = _norm(base_table)
+    base_raw_norm = _norm(f"{base_table} {base_alias}".strip())
+    base_alias_norm = _norm(base_alias)
 
     joins_out = []
+    debug_rows = []  # optional: for debugging only
+
     for j in sql_structure.get("joins", []):
-        # Expecting j to contain left_table, left_key, right_table, right_key, type
-        left_tbl_raw = j.get("left_table", "")
-        right_tbl_raw = j.get("right_table", "")
-        left_table, left_alias = parse_table_str(left_tbl_raw)
-        right_table, right_alias = parse_table_str(right_tbl_raw)
+        # keep the original join object untouched
+        left_raw = j.get("left_table") or j.get("left_table_raw") or ""
+        right_raw = j.get("right_table") or j.get("right_table_raw") or ""
 
-        # Which side is the base? compare table name OR full raw string (be permissive)
-        base_name_matches_left = (
-            base_table and (base_table == left_table or base_table == left_tbl_raw or base_alias == left_alias)
-        )
-        base_name_matches_right = (
-            base_table and (base_table == right_table or base_table == right_tbl_raw or base_alias == right_alias)
-        )
+        L = _parse_table_str(left_raw)
+        R = _parse_table_str(right_raw)
 
-        # Determine which table should appear after JOIN (the one that's NOT the base)
-        if base_name_matches_left and not base_name_matches_right:
-            join_target_raw = right_tbl_raw
-            # ON should use left_key = right_key (left side refers to base)
-            on_left = j.get("left_key")
-            on_right = j.get("right_key")
-        elif base_name_matches_right and not base_name_matches_left:
-            join_target_raw = left_tbl_raw
-            # ON should use right_key = left_key (right side refers to base) — keep readable as left = right
-            # but ensure we place the base side on the right of the equals if you prefer consistent ordering
-            on_left = j.get("right_key")
-            on_right = j.get("left_key")
+        l_table_norm = _norm(L["table"])
+        l_raw_norm = _norm(L["raw"])
+        l_alias_norm = _norm(L["alias"])
+        r_table_norm = _norm(R["table"])
+        r_raw_norm = _norm(R["raw"])
+        r_alias_norm = _norm(R["alias"])
+
+        # detect whether base appears on left or right (permissive)
+        base_on_left = base_table_norm and (base_table_norm == l_table_norm or base_raw_norm == l_raw_norm or base_alias_norm == l_alias_norm)
+        base_on_right = base_table_norm and (base_table_norm == r_table_norm or base_raw_norm == r_raw_norm or base_alias_norm == r_alias_norm)
+
+        # choose which table to attach after JOIN (the one that's NOT the base)
+        if base_on_left and not base_on_right:
+            join_target_raw = right_raw   # attach right (other) to base
+            # on_clause: base_key = other_key => left_key = right_key
+            base_key = j.get("left_key") or j.get("lk") or ""
+            other_key = j.get("right_key") or j.get("rk") or ""
+            on_clause = f"{base_key} = {other_key}" if base_key and other_key else (j.get("condition") or j.get("cond") or "1=1")
+        elif base_on_right and not base_on_left:
+            join_target_raw = left_raw    # attach left (other) to base
+            # on_clause: base_key = other_key => right_key = left_key
+            base_key = j.get("right_key") or j.get("rk") or ""
+            other_key = j.get("left_key") or j.get("lk") or ""
+            on_clause = f"{base_key} = {other_key}" if base_key and other_key else (j.get("condition") or j.get("cond") or "1=1")
         else:
-            # If we can't detect base (both sides ambiguous), fallback to original left_table as join target
-            join_target_raw = left_tbl_raw
-            on_left = j.get("left_key")
-            on_right = j.get("right_key")
+            # ambiguous or no base detected: don't mutate UI representation.
+            # Fallback: use UI left_table as join target and use provided keys/condition.
+            join_target_raw = left_raw
+            left_key = j.get("left_key") or j.get("lk") or ""
+            right_key = j.get("right_key") or j.get("rk") or ""
+            on_clause = f"{left_key} = {right_key}" if left_key and right_key else (j.get("condition") or j.get("cond") or "1=1")
 
-        join_type = j.get("type", "LEFT").upper()
-        # Build final join clause (preserve raw strings which may already contain aliases)
-        join_clause = f"{join_type} JOIN {join_target_raw} ON {on_left} = {on_right}"
+        join_type = (j.get("type") or "LEFT").upper()
+        join_clause = f"{join_type} JOIN {join_target_raw} ON {on_clause}"
         joins_out.append(join_clause)
+
+        # Optional debug row (helpful during dev)
+        debug_rows.append({
+            "orig_left": left_raw, "orig_right": right_raw,
+            "base_on_left": bool(base_on_left), "base_on_right": bool(base_on_right),
+            "join_target_raw": join_target_raw, "on_clause": on_clause, "join_clause": join_clause
+        })
 
     payload = {
         "from": {"table": base_table, "alias": base_alias},
