@@ -315,39 +315,30 @@ async def infer_sql_structure(body: Dict[str, Any]):
         t = (t or "").strip()
         if not t:
             return {"table": "", "alias": ""}
-        parts = t.split()
+        s = re.sub(r"\s+", " ", t)
+        s = re.sub(r"\s+AS\s+", " ", s, flags=re.I)
+        parts = s.split(" ")
         if len(parts) >= 2:
             table_name = " ".join(parts[:-1]).strip()
             if "." in table_name:
                 table_name = table_name.split(".", 1)[1]
             return {"table": table_name, "alias": parts[-1].strip()}
-        table_name = t
+        table_name = parts[0]
         if "." in table_name:
             table_name = table_name.split(".", 1)[1]
         return {"table": table_name, "alias": ""}
 
-    # --- NEW: function to get base table clean name without alias ---
     def get_base_table_name(t: str) -> str:
         if not t:
             return ""
-        # Split by space and take first part as pure table name
-        return t.split()[0].strip()
+        # prefer the first token as the pure table name (strip alias)
+        s = str(t).strip()
+        s = re.sub(r"\s+", " ", s)
+        # remove schema if present
+        first = s.split()[0]
+        return first.split(".", 1)[-1]
 
-    # Use this to normalize base table to pure table name string
-    base_table = ""
-    if base_table_from_request:
-        base_table = get_base_table_name(base_table_from_request)
-    else:
-        # fallback: choose most frequent table name from rows (without alias)
-        table_counts: Dict[str, int] = {}
-        for r in rows:
-            t_raw = (r.get("table") or "").strip()
-            ta = split_table_alias(t_raw)
-            table = ta["table"]
-            table_counts[table] = table_counts.get(table, 0) + 1
-        if table_counts:
-            base_table = max(table_counts.items(), key=lambda kv: kv[1])[0]
-
+    # ---- build parsed_rows and table_counts from the incoming rows ----
     table_counts: Dict[str, int] = {}
     table_columns: Dict[str, set] = {}
     parsed_rows = []
@@ -357,7 +348,7 @@ async def infer_sql_structure(body: Dict[str, Any]):
         c = (r.get("column") or "").strip()
         out = (r.get("output") or "").strip()
         tr = (r.get("transform") or "").strip()
-        join_cond = (r.get("join") or "").strip()  # New join role column
+        join_cond = (r.get("join") or "").strip()
         if not (t_raw and c and out):
             continue
         ta = split_table_alias(t_raw)
@@ -377,11 +368,16 @@ async def infer_sql_structure(body: Dict[str, Any]):
     if not parsed_rows:
         return {"from": "", "select_items": [], "joins": [], "message": "No complete mapping rows to infer from"}
 
-    base_table = base_table_from_request if base_table_from_request else max(table_counts.items(), key=lambda kv: kv[1])[0]
+    # decide base_table once, using cleaned value (no alias)
+    if base_table_from_request:
+        base_table = get_base_table_name(base_table_from_request)
+    else:
+        # choose most frequent table from parsed_rows
+        base_table = max(table_counts.items(), key=lambda kv: kv[1])[0]
+
+    # build alias_map (reuse provided aliases where present)
     alias_map: Dict[str, str] = {}
     used = set()
-
-    # Reuse aliases already present in parsed_rows
     for pr in parsed_rows:
         alias_in = pr.get("alias_in", "").strip()
         table = pr.get("table", "").strip()
@@ -399,39 +395,47 @@ async def infer_sql_structure(body: Dict[str, Any]):
         used.add(cand)
         return cand
 
-    # Assign new aliases only to tables without one already
-    for t in table_counts:
+    # Assign new aliases to tables missing one
+    for t in list(table_counts.keys()):
         if t not in alias_map or not alias_map[t]:
             alias_map[t] = make_alias(t)
 
-    # Get base alias safely with fallback
-    base_alias = alias_map.get(base_table)
+    # normalize alias_map keys to lowercase for safe lookup
+    alias_map = {k.strip().lower(): v for k, v in alias_map.items()}
+
+    # Get base alias (from alias_map using lowercased key)
+    base_alias = alias_map.get(base_table.lower())
     if not base_alias:
-        base_alias = base_table[:1].upper() if base_table else "T"
+        base_alias = (base_table[:1].upper() if base_table else "T")
 
     base_from = f"{base_table} {base_alias}"
-    
-    # ----------------- Preprocessing Step: Realign join sides to base table -----------------
+
+    # ----------------- Preprocessing: realign parsed_rows so base is on the right in join terms -----------------
     for pr in parsed_rows:
         join_cond = pr.get("join", "")
         if not join_cond:
             continue
         (ltbl, lcol), (rtbl, rcol) = parse_join_condition_sides(join_cond)
-        # If the left table is the base, swap so base is always on the right
-        if ltbl.lower() == base_table.lower() and rtbl.lower() != base_table.lower():
-            # Swap so base_table is always right
-            pr["table"], pr["column"] = rtbl, rcol
-            pr["join"] = f"{ltbl}.{lcol} = {rtbl}.{rcol}"  # base (rtbl.rcol) always on right
-    # ----------------- End Preprocessing Step -----------------
+        if not ltbl or not rtbl:
+            continue
+        if ltbl.strip().lower() == base_table.strip().lower() and rtbl.strip().lower() != base_table.strip().lower():
+            # swap so base appears on right
+            pr["table"], pr["column"] = rtbl.strip(), rcol.strip()
+            pr["join"] = f"{ltbl.strip()}.{lcol.strip()} = {rtbl.strip()}.{rcol.strip()}"
 
-    # Then continue with selective items, join construction, etc.
+    # Build select items
     select_items = []
     for pr in parsed_rows:
-        t, a, col, out, tr = pr["table"], alias_map[pr["table"]], pr["column"], pr["output"], pr["transform"]
+        t = pr["table"]
+        a = alias_map.get(t.lower(), (t[:1] or "T").upper())
+        col = pr["column"]
+        out = pr["output"]
+        tr = pr["transform"]
         expr = tr if tr else f"{a}.{col}"
         alias_for_output = (out.replace(" ", "") or col)
         select_items.append({"output": out, "expression": expr, "alias": alias_for_output})
 
+    # Build join_conditions_by_table
     join_conditions_by_table: Dict[str, str] = {}
     for pr in parsed_rows:
         t = pr["table"]
@@ -442,30 +446,23 @@ async def infer_sql_structure(body: Dict[str, Any]):
             if t in join_conditions_by_table:
                 pr["join"] = join_conditions_by_table[t]
 
+    # Now produce joins in a deterministic way (your existing logic but comparisons use lower())
     joins = []
     joined_tables = set()
-    # Normalize alias_map keys and values to lowercase (if alias_map is a dict)
-    alias_map = {k.strip().lower(): v for k, v in alias_map.items()}
-
-    old_base_alias = None
-    if base_table in alias_map:
-        old_base_alias = alias_map[base_table].lower()
-
-    # Track counts of joins having each left table
     left_table_counts = {}
+
+    # count occurrences of left tables (using normalized names)
     for t, condition in join_conditions_by_table.items():
-        if not t.strip() or t.lower() == "nan":
+        if not t or t.lower() == "nan":
             continue
         (ltbl, lcol), (rtbl, rcol) = parse_join_condition_sides(condition)
         if not ltbl or not rtbl:
             continue
-        ltbl_norm = ltbl.strip()
-        # Count occurrences of left tables
-        left_table_counts[ltbl_norm.lower()] = left_table_counts.get(ltbl_norm.lower(), 0) + 1
+        left_table_counts[ltbl.strip().lower()] = left_table_counts.get(ltbl.strip().lower(), 0) + 1
 
     used_left_tables = set()
     for t, condition in join_conditions_by_table.items():
-        if not t.strip() or t.lower() == "nan":
+        if not t or t.lower() == "nan":
             continue
         (ltbl, lcol), (rtbl, rcol) = parse_join_condition_sides(condition)
         if not ltbl or not rtbl:
@@ -473,12 +470,12 @@ async def infer_sql_structure(body: Dict[str, Any]):
         ltbl_norm = ltbl.strip()
         rtbl_norm = rtbl.strip()
 
-        # Debug print base table equality checks
         print(f"Comparing base table '{base_table.lower()}' with left '{ltbl_norm.lower()}' and right '{rtbl_norm.lower()}'")
 
         if ltbl_norm.lower() == base_table.lower() and rtbl_norm.lower() == base_table.lower():
             print(f"Skipping degenerate join where both sides are base table: {ltbl_norm} = {rtbl_norm}")
             continue
+
         join_key = tuple(sorted([ltbl_norm.lower(), rtbl_norm.lower()]))
         if join_key in joined_tables:
             print(f"Skipping join because join_key {join_key} already processed")
@@ -491,6 +488,7 @@ async def infer_sql_structure(body: Dict[str, Any]):
 
         print(f"Initial join: {display_left_table} ({display_left_alias}.{display_left_key}) = {display_right_table} ({display_right_alias}.{display_right_key})")
 
+        # uniqueness swap (if needed)
         if (display_left_table.lower() in used_left_tables and display_left_table.lower() != base_table.lower()):
             if display_right_table.lower() not in used_left_tables or display_right_table.lower() == base_table.lower():
                 print(f"Swapping for uniqueness: left_table '{display_left_table}' already used; swapping with right_table '{display_right_table}'")
@@ -498,20 +496,20 @@ async def infer_sql_structure(body: Dict[str, Any]):
                 display_left_key, display_right_key = display_right_key, display_left_key
                 display_left_alias, display_right_alias = display_right_alias, display_left_alias
 
+        # ensure base is not on left
         if display_left_table.lower() == base_table.lower():
             print(f"Final enforcement swap because base table '{base_table}' is on the left; swapping sides")
             display_left_table, display_right_table = display_right_table, display_left_table
             display_left_key, display_right_key = display_right_key, display_left_key
             display_left_alias, display_right_alias = display_right_alias, display_left_alias
 
-        display_condition = f"{display_left_alias}.{display_left_key} = {display_right_alias}.{display_right_key}"
         left_key_str = f"{display_left_alias}.{display_left_key}"
         right_key_str = f"{display_right_alias}.{display_right_key}"
         condition_str = f"{left_key_str} = {right_key_str}"
 
         used_left_tables.add(display_left_table.lower())
 
-        print(f"Final join clause: LEFT TABLE = {display_left_table} ({left_key_str}), RIGHT TABLE = {display_right_table} ({right_key_str}), CONDITION = {display_condition}")
+        print(f"Final join clause: LEFT TABLE = {display_left_table} ({left_key_str}), RIGHT TABLE = {display_right_table} ({right_key_str}), CONDITION = {condition_str}")
 
         join_clause = {
             "type": "LEFT",
