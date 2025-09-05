@@ -393,6 +393,20 @@ async def infer_sql_structure(body: Dict[str, Any]):
 
     base_from = f"{base_table} {base_alias}"
 
+    # ----------------- Preprocessing Step: Realign join sides to base table -----------------
+	for pr in parsed_rows:
+		join_cond = pr.get("join", "")
+		if not join_cond:
+			continue
+		(ltbl, lcol), (rtbl, rcol) = parse_join_condition_sides(join_cond)
+		# If the left table is the base, swap so base is always on the right
+		if ltbl.lower() == base_table.lower() and rtbl.lower() != base_table.lower():
+			# Swap so base_table is always right
+			pr["table"], pr["column"] = rtbl, rcol
+			pr["join"] = f"{ltbl}.{lcol} = {rtbl}.{rcol}"  # base (rtbl.rcol) always on right
+
+	# ----------------- End Preprocessing Step -----------------
+    
     select_items = []
     for pr in parsed_rows:
         t, a, col, out, tr = pr["table"], alias_map[pr["table"]], pr["column"], pr["output"], pr["transform"]
@@ -468,7 +482,7 @@ async def infer_sql_structure(body: Dict[str, Any]):
         rtbl_lower = rtbl.lower()
 
         # Automatically position the base table on the left side of the join
-        if rtbl_lower == base_table_lower and ltbl_lower != base_table_lower:
+        if ltbl_lower == base_table_lower and rtbl_lower != base_table_lower:
             # Swap left/right tables and keys
             left_table = f"{rtbl} {ralias_fixed}".strip()
             right_table = f"{ltbl} {lalias_fixed}".strip()
@@ -707,4 +721,5 @@ def health():
 
 # Mount router
 app.include_router(router)
+
 
