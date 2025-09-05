@@ -464,13 +464,13 @@ async def infer_sql_structure(body: Dict[str, Any]):
             display_left_key = lalias_fixed + '.' + lcol if lalias_fixed else lcol
             display_right_table = rtbl
             display_right_key = ralias_fixed + '.' + rcol if ralias_fixed else rcol
-            display_condition = f"{display_right_key} = {display_left_key}" if swap_condition else f"{display_left_key} = {display_right_key}"
+            display_condition = f"{display_left_key} = {display_right_key}"
         elif ltbl_lower == base_table_lower:
             display_left_table = rtbl
             display_left_key = ralias_fixed + '.' + rcol if ralias_fixed else rcol
             display_right_table = ltbl
             display_right_key = lalias_fixed + '.' + lcol if lalias_fixed else lcol
-            display_condition = f"{display_right_key} = {display_left_key}" if swap_condition else f"{display_left_key} = {display_right_key}"
+            display_condition = f"{display_left_key} = {display_right_key}"
         else:
             display_left_table = ltbl
             display_left_key = lalias_fixed + '.' + lcol if lalias_fixed else lcol
@@ -700,3 +700,4 @@ def health():
 
 # Mount router
 app.include_router(router)
+
