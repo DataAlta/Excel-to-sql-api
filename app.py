@@ -707,7 +707,7 @@ async def generate_sql_from_excel_mapping(body: Dict[str, Any] = Body(...)):
         "from": {"table": base_table, "alias": base_alias},
         "select_items": sql_structure.get("select_items", []),
         "joins": [
-            f"{j['type']} JOIN {j['right_table']} ON {j['left_key']} = {j['right_key']}"
+            f"{j['type']} JOIN {j['left_table']} ON {j['left_key']} = {j['right_key']}"
             for j in sql_structure.get("joins", [])
         ],
         "patterns": {}
@@ -735,4 +735,5 @@ def health():
 
 # Mount router
 app.include_router(router)
+
 
