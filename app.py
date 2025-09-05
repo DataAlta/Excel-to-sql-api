@@ -489,6 +489,31 @@ async def infer_sql_structure(body: Dict[str, Any]):
         joins.append(join_clause)
         joined_tables.add(join_key)
 
+    def deduplicate_and_swap_joins(joins):
+        unique_lefts = set()
+        final_joins = []
+        for join in joins:
+            left = join['left_table']
+            right = join['right_table']
+
+            if left not in unique_lefts:
+                final_joins.append(join)
+                unique_lefts.add(left)
+            elif right not in unique_lefts:
+                # swap sides
+                join['left_table'], join['right_table'] = right, left
+                join['left_key'], join['right_key'] = join['right_key'], join['left_key']
+                # update condition string accordingly:
+                join['condition'] = f"{join['left_key']} = {join['right_key']}"
+                final_joins.append(join)
+                unique_lefts.add(right)
+            else:
+                # both sides already used, skip join
+                pass
+        return final_joins
+
+    joins = deduplicate_and_swap_joins(joins)
+
     return {
         "from": base_from,
         "select_items": select_items,
@@ -700,4 +725,3 @@ def health():
 
 # Mount router
 app.include_router(router)
-
