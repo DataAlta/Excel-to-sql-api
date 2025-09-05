@@ -432,49 +432,49 @@ async def infer_sql_structure(body: Dict[str, Any]):
         old_base_alias = alias_map[base_table].lower()
 
     for t, condition in join_conditions_by_table.items():
-		if t == base_table or not t.strip() or t.lower() == "nan":
-			continue
-		(ltbl, lcol), (rtbl, rcol) = parse_join_condition_sides(condition)
-		if not ltbl or not rtbl:
-			continue
-		ltbl_norm = ltbl.strip()
-		rtbl_norm = rtbl.strip()
-		join_key = tuple(sorted([ltbl_norm.lower(), rtbl_norm.lower()]))
-		if join_key in joined_tables:
-			continue
+        if t == base_table or not t.strip() or t.lower() == "nan":
+            continue
+        (ltbl, lcol), (rtbl, rcol) = parse_join_condition_sides(condition)
+        if not ltbl or not rtbl:
+            continue
+        ltbl_norm = ltbl.strip()
+        rtbl_norm = rtbl.strip()
+        join_key = tuple(sorted([ltbl_norm.lower(), rtbl_norm.lower()]))
+        if join_key in joined_tables:
+            continue
 
-		lalias = alias_map.get(ltbl_norm.lower(), "")
-		ralias = alias_map.get(rtbl_norm.lower(), "")
-		base_alias_lower = base_alias.lower() if base_alias else ""
-		
-		# Determine if base table is on left or right
-		base_on_left = (ltbl_norm.lower() == base_table.lower()) or (lalias.lower() == base_alias_lower)
-		base_on_right = (rtbl_norm.lower() == base_table.lower()) or (ralias.lower() == base_alias_lower)
+        lalias = alias_map.get(ltbl_norm.lower(), "")
+        ralias = alias_map.get(rtbl_norm.lower(), "")
+        base_alias_lower = base_alias.lower() if base_alias else ""
+        
+        # Determine if base table is on left or right
+        base_on_left = (ltbl_norm.lower() == base_table.lower()) or (lalias.lower() == base_alias_lower)
+        base_on_right = (rtbl_norm.lower() == base_table.lower()) or (ralias.lower() == base_alias_lower)
 
-		# Ensure base always on right side in the join clause
-		if base_on_left and not base_on_right:
-			# Swap left and right sides
-			display_left_table, display_left_key, display_left_alias = rtbl_norm, rcol, ralias
-			display_right_table, display_right_key, display_right_alias = ltbl_norm, lcol, lalias
-			display_condition = f"{display_right_alias}.{display_right_key} = {display_left_alias}.{display_left_key}"
-		else:
-			display_left_table, display_left_key, display_left_alias = ltbl_norm, lcol, lalias
-			display_right_table, display_right_key, display_right_alias = rtbl_norm, rcol, ralias
-			display_condition = f"{display_left_alias}.{display_left_key} = {display_right_alias}.{display_right_key}"
+        # Ensure base always on right side in the join clause
+        if base_on_left and not base_on_right:
+            # Swap left and right sides
+            display_left_table, display_left_key, display_left_alias = rtbl_norm, rcol, ralias
+            display_right_table, display_right_key, display_right_alias = ltbl_norm, lcol, lalias
+            display_condition = f"{display_right_alias}.{display_right_key} = {display_left_alias}.{display_left_key}"
+        else:
+            display_left_table, display_left_key, display_left_alias = ltbl_norm, lcol, lalias
+            display_right_table, display_right_key, display_right_alias = rtbl_norm, rcol, ralias
+            display_condition = f"{display_left_alias}.{display_left_key} = {display_right_alias}.{display_right_key}"
 
-		join_clause = {
-			"type": "LEFT",
-			"left_table": display_left_table,
-			"left_key": f"{display_left_alias}.{display_left_key}" if display_left_alias else display_left_key,
-			"right_table": display_right_table,
-			"right_key": f"{display_right_alias}.{display_right_key}" if display_right_alias else display_right_key,
-			"condition": display_condition,
-		}
-		joins.append(join_clause)
-		joined_tables.add(join_key)
+        join_clause = {
+            "type": "LEFT",
+            "left_table": display_left_table,
+            "left_key": f"{display_left_alias}.{display_left_key}" if display_left_alias else display_left_key,
+            "right_table": display_right_table,
+            "right_key": f"{display_right_alias}.{display_right_key}" if display_right_alias else display_right_key,
+            "condition": display_condition,
+        }
+        joins.append(join_clause)
+        joined_tables.add(join_key)
 
-	# Create base table options from unique left tables
-	base_table_options = sorted(set(j['left_table'] for j in joins))
+    # Create base table options from unique left tables
+    base_table_options = sorted(set(j['left_table'] for j in joins))
 
     return {
         "from": base_from,
