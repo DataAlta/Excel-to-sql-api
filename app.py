@@ -395,17 +395,17 @@ async def infer_sql_structure(body: Dict[str, Any]):
 
     # ----------------- Preprocessing Step: Realign join sides to base table -----------------
     for pr in parsed_rows:
-		join_cond = pr.get("join", "")
-		if not join_cond:
-			continue
-		(ltbl, lcol), (rtbl, rcol) = parse_join_condition_sides(join_cond)
-		# If the left table is the base, swap so base is always on the right
-		if ltbl.lower() == base_table.lower() and rtbl.lower() != base_table.lower():
-			# Swap so base_table is always right
-			pr["table"], pr["column"] = rtbl, rcol
-			pr["join"] = f"{ltbl}.{lcol} = {rtbl}.{rcol}"  # base (rtbl.rcol) always on right
+	    join_cond = pr.get("join", "")
+	    if not join_cond:
+		    continue
+	    (ltbl, lcol), (rtbl, rcol) = parse_join_condition_sides(join_cond)
+	    # If the left table is the base, swap so base is always on the right
+	    if ltbl.lower() == base_table.lower() and rtbl.lower() != base_table.lower():
+		    # Swap so base_table is always right
+		    pr["table"], pr["column"] = rtbl, rcol
+		    pr["join"] = f"{ltbl}.{lcol} = {rtbl}.{rcol}"  # base (rtbl.rcol) always on right
 
-	# ----------------- End Preprocessing Step -----------------
+    # ----------------- End Preprocessing Step -----------------
     
     select_items = []
     for pr in parsed_rows:
@@ -721,6 +721,7 @@ def health():
 
 # Mount router
 app.include_router(router)
+
 
 
 
