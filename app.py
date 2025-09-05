@@ -394,7 +394,7 @@ async def infer_sql_structure(body: Dict[str, Any]):
     base_from = f"{base_table} {base_alias}"
 
     # ----------------- Preprocessing Step: Realign join sides to base table -----------------
-	for pr in parsed_rows:
+    for pr in parsed_rows:
 		join_cond = pr.get("join", "")
 		if not join_cond:
 			continue
@@ -721,5 +721,6 @@ def health():
 
 # Mount router
 app.include_router(router)
+
 
 
