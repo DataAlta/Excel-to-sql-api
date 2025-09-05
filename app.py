@@ -484,6 +484,13 @@ async def infer_sql_structure(body: Dict[str, Any]):
                 display_left_key, display_right_key = display_right_key, display_left_key
                 display_left_alias, display_right_alias = display_right_alias, display_left_alias
 
+        # FINAL ENFORCEMENT: Force base table never to be on the left (must always run last)
+        if display_left_table.lower() == base_table.lower():
+            display_left_table, display_right_table = display_right_table, display_left_table
+            display_left_key, display_right_key = display_right_key, display_left_key
+            display_left_alias, display_right_alias = display_right_alias, display_left_alias
+            display_condition = f"{display_left_alias}.{display_left_key} = {display_right_alias}.{display_right_key}"
+
         left_key_str = f"{display_left_alias}.{display_left_key}"
         right_key_str = f"{display_right_alias}.{display_right_key}"
         condition_str = f"{left_key_str} = {right_key_str}"
